@@ -1,0 +1,15 @@
+Manufacturing Consent — Hacker Times wordmark subset
+Source: https://github.com/google/fonts/tree/main/ofl/manufacturingconsent
+Project: https://github.com/googlefonts/manufacturing-consent-font
+Copyright 2019 The Manufacturing Consent Project Authors.
+License: SIL Open Font License 1.1; see OFL-ManufacturingConsent.txt.
+
+ManufacturingConsent-HackerTimes.woff2 is a format conversion and subset of
+ManufacturingConsent-Regular.ttf for the exact text "Hacker Times". It is not
+an altered design. All retained outlines, metrics, shaping, hinting and license
+metadata are preserved. No Reserved Font Name was specified in the source
+license. Original TTF and license remain distributed alongside this subset.
+
+Original TTF: 61,796 bytes.
+Wordmark WOFF2: 4,868 bytes.
+WOFF2 SHA-256: c3f475e61938f7245ec88cf3b6f93b7342da7c3d0344d2d527b3e49615199c4d

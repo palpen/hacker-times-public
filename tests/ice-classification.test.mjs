@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'ht-ice-classification-'));
+try{
+ await build({entryPoints:['lib/policy.ts','lib/news.ts'],bundle:true,platform:'node',format:'esm',outdir:tmp});
+ const p=await import(pathToFileURL(path.join(tmp,'policy.js'))),n=await import(pathToFileURL(path.join(tmp,'news.js')));
+ const actual='Evidence of a spying operation by ICE against left-wing social movements';
+ const url='https://www.wired.com/story/ice-is-running-one-of-the-largest-anti-left-surveillance-operations-in-us-history/';
+ assert.equal(p.classifyTopic(actual,url),'Science','legacy policy must remain unchanged');
+ assert.equal(p.classifyTopicV3(actual,url),'Technology','agency acronym is not scientific ice');
+ for(const title of ['ICE immigration raids','ICE detention records','ICE deportations','ICE customs operation','ICE is spying on activists','Surveillance operation by ICE','ICE’s spying operation'])assert.equal(p.classifyTopicV3(title,'https://example.com'),'Technology',title);
+ assert.equal(p.classifyTopicV3('Court reviews ICE detention policy','https://example.com'),'Business','existing legal/business priority retained');
+ assert.equal(p.classifyTopicV3('ICE uses AI in immigration enforcement','https://example.com'),'AI','existing AI priority retained');
+ assert.equal(p.classifyTopicV3('A game about ICE immigration raids','https://example.com'),'Games','existing gaming priority retained');
+ for(const title of ['Ice melts at zero degrees','ICE MELTS AT ZERO DEGREES','A new glacier and ice core record','Icebergs reveal the past','ICE in bacterial genomes','Ice surveillance from orbit','SPYING ON MELTING ICE FROM ORBIT','ICE MELT OBSERVED BY SPYING SATELLITES','ICE MELT DRIVES IMMIGRATION'])assert.equal(p.classifyTopicV3(title,'https://example.com'),p.classifyTopic(title,'https://example.com'),'unrelated ice behavior retained: '+title);
+ assert.equal(p.classifyTopicV3('ICE is an acronym','https://example.com'),'Science','ambiguous acronym remains outside this narrow fix');
+ assert.equal(p.monthPolicyVersion,'hn-month-v3.2');
+ const stamp=new Date().toISOString(),at=Date.parse(stamp),time=Math.floor((at-864e5)/1000);
+ const lead={id:1,title:'Lead',url:'https://example.com/lead',score:100,comments:10,time,category:'Technology',editorialScore:100,placement:'lead',hnRank:1,hnPage:1,discoverySource:'current'};
+ const oldIce={id:2,title:actual,url,score:50,comments:10,time,category:'Science',editorialScore:50,placement:'section',discoverySource:'history'};
+ const snapshot={schemaVersion:1,selectionVersion:2,layoutVersion:2,policyVersion:'hn-month-v3',policyConfig:p.monthPolicyConfig,ranking:p.monthRanking,sourceMode:'hn-month-sample',windowStart:new Date(at-30*864e5).toISOString(),windowEnd:stamp,discovery:{coverage:'sampled'},basePublicationVersion:'base',generatedAt:stamp,frontPageIds:[1],sourcePages:[{url:'https://news.ycombinator.com/',ids:[1]}],algorithmVersion:3,candidateCount:2,fetchedCount:2,rankedStories:[lead,oldIce],selectedStories:[lead,oldIce]};
+ const payload={generatedAt:stamp,stories:[lead,oldIce].map(s=>({...s,category:'Technology',headline:s.title,summary:'Verified source summary.',publisher:'Example',image:null}))};
+ const old=n.validateEdition(payload,undefined,snapshot);
+ assert.equal(old.policyVersion,'hn-month-v3');assert.equal(old.stories[1].category,'Science','in-flight old snapshot must never be reclassified');
+ const fixedIce={...oldIce,category:p.classifyTopicV3(actual,url)};
+ const next=n.validateEdition(payload,undefined,{...snapshot,policyVersion:p.monthPolicyVersion,rankedStories:[lead,fixedIce],selectedStories:[lead,fixedIce]});
+ assert.equal(next.policyVersion,'hn-month-v3.2');assert.equal(next.stories[1].category,'Technology');
+ assert.deepEqual(next.stories.map(s=>s.id),old.stories.map(s=>s.id));assert.deepEqual(next.stories.map(s=>s.score),old.stories.map(s=>s.score));
+ console.log('PASS narrow ICE agency disambiguation, natural ice and legacy preservation, AI/Games/Business priorities, versioned new plans and immutable old snapshot categories.');
+}finally{fs.rmSync(tmp,{recursive:true,force:true});}

@@ -1,0 +1,26 @@
+Hacker Times — one consistent blackletter masthead
+
+Family: Manufacturing Consent
+Style: Regular (400), the family's original heavy blackletter design
+File: ManufacturingConsent-Regular.ttf, 61,796 bytes, unmodified original
+SHA-256: 5a965329cc99d7b8b22ddbdbf98ee3dfef111c68b5e7aba80128dbefb5427db3
+
+Official distribution:
+https://github.com/google/fonts/tree/main/ofl/manufacturingconsent
+Font download:
+https://raw.githubusercontent.com/google/fonts/main/ofl/manufacturingconsent/ManufacturingConsent-Regular.ttf
+Project and design history:
+https://github.com/googlefonts/manufacturing-consent-font
+License source:
+https://raw.githubusercontent.com/google/fonts/main/ofl/manufacturingconsent/OFL.txt
+
+Copyright 2019 The Manufacturing Consent Project Authors
+(https://github.com/googlefonts/manufacturing-consent-font)
+Licensed under the SIL Open Font License, Version 1.1.
+The complete license accompanies this font in OFL-ManufacturingConsent.txt.
+
+Downloaded 2026-11-02 from the official Google Fonts distribution.
+The project describes this as an original newspaper-masthead-inspired font.
+The Site uses the unmodified licensed typeface to render Hacker Times as one
+selectable text run. No New York Times logo image is included, extracted,
+or traced by this Site. Both words use the same face, weight, size and color.

@@ -1,0 +1,6 @@
+import assert from'node:assert/strict';import{build}from'esbuild';import fs from'node:fs';import os from'node:os';import path from'node:path';import{pathToFileURL}from'node:url';
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-assets-'));const file=path.join(dir,'assets.mjs');await build({entryPoints:['lib/asset-response.ts'],bundle:true,platform:'node',format:'esm',outfile:file});const{assetResponse}=await import(pathToFileURL(file));const a=JSON.parse(fs.readFileSync('lib/edition-assets.ts','utf8').match(/editionAssets=(.*);/)[1]);
+for(const key of ['js','css','font']){const req=new Request('https://private.example'+a[key]);const r=assetResponse(req);assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'private, max-age=31536000, immutable');assert.ok((await r.arrayBuffer()).byteLength>0);const hit=assetResponse(new Request(req,{headers:{'If-None-Match':r.headers.get('etag')}}));assert.equal(hit.status,304);}
+assert.equal(assetResponse(new Request('https://private.example/')),null);
+assert.equal(assetResponse(new Request('https://private.example/reader-assets/not-found')).status,404);
+console.log('PASS: generic versioned assets have private immutable browser caching, conditional304, correct content, no edition HTML. Live gate tested separately.');fs.rmSync(dir,{recursive:true,force:true});
