@@ -129,7 +129,7 @@ export async function prepareLeadPlan(bucket:R2Bucket,publication:Publication,ba
  return {schema:1,basePublicationVersion:publication.current.version,baseRevision:baseState.revision,baseState,nextState,audit};
 }
 export async function verifyLeadPlan(bucket:R2Bucket,publication:Publication,snapshot:SourceSnapshot){
- const plan=snapshot.leadPlan;if(!plan||plan.schema!==1||![balancedLeadPolicyVersion,currentLeadScoringVersion].includes(snapshot.leadPolicyVersion??'')||snapshot.leadPolicyVersion!==plan.audit?.policyVersion||snapshot.selectionVersion!==3||plan.basePublicationVersion!==snapshot.basePublicationVersion||plan.baseRevision!==plan.baseState?.revision)fail('has an invalid pinned plan');
+ const plan=snapshot.leadPlan;if(!plan||plan.schema!==1||![balancedLeadPolicyVersion,currentLeadScoringVersion].includes(snapshot.leadPolicyVersion??'')||snapshot.leadPolicyVersion!==plan.audit?.policyVersion||![3,4,5,6].includes(snapshot.selectionVersion??0)||plan.basePublicationVersion!==snapshot.basePublicationVersion||plan.baseRevision!==plan.baseState?.revision)fail('has an invalid pinned plan');
  validateLeadState(plan.baseState);validateLeadState(plan.nextState);
  if(plan.nextState.revision!==plan.baseRevision+1||plan.audit?.status!=='selected'||plan.audit.leadId!==snapshot.selectedStories[0]?.id||plan.nextState.active.id!==snapshot.selectedStories[0]?.id)fail('has an inconsistent pinned plan');
  // Exact same-content retries may use the previous base; the publication digest

@@ -1,0 +1,1 @@
+.masthead .brand{grid-column:2}footer .edition-update{display:block;font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--muted);margin:0;padding:0 0 24px;overflow-wrap:anywhere}@media(max-width:680px){.masthead{display:flex;justify-content:center;padding-bottom:21px}.masthead .brand{grid-column:auto}.header-actions .icon-button{top:50%}}

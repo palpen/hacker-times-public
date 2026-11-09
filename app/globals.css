@@ -30,10 +30,11 @@ html{line-height:1.5;-webkit-text-size-adjust:100%;tab-size:4}h1,h2,h3,p,figure{
 [hidden]{display:none!important}.sections a{display:flex;align-items:center;position:relative;min-height:50px;padding:0 3px;font-size:13px;color:var(--muted);white-space:nowrap}.sections a.active{font-weight:700;color:var(--ink)}.sections a.active:after{content:"";position:absolute;bottom:0;height:3px;background:var(--ink);left:3px;right:3px}.sections a:hover{text-decoration:none}.archive-links a{min-height:44px;display:flex;align-items:center;text-decoration:underline;text-underline-offset:4px}.theme-sun{display:none}[data-theme=dark] .theme-sun{display:block}[data-theme=dark] .theme-moon{display:none}
 @media(max-width:1000px){.sections a{font-size:12px}}@media(max-width:680px){.sections a{font-size:14px;min-height:53px;padding:0 1px}.sections a.active:after{left:0;right:0}}@media(max-width:360px){.sections a{font-size:13px}}
 
-/* The saved edition timestamp replaces the date; it remains visible on phones. */
-.masthead .edition-update{display:block;min-width:0;max-width:220px;font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--muted);padding-bottom:7px;overflow-wrap:anywhere}
-@media(max-width:680px){.masthead{display:grid;grid-template-columns:minmax(0,1fr);row-gap:8px;padding-bottom:12px}.masthead .brand{grid-row:1}.masthead .edition-update{grid-row:2;max-width:none;align-self:auto;margin:0 -46px;padding:0;text-align:center}.header-actions .icon-button{top:49px}}
-@media(max-width:360px){.masthead .edition-update{margin-right:-40px;margin-left:-40px}.header-actions .icon-button{top:45px}}
+/* Footer timestamp start */
+.masthead .brand{grid-column:2}
+footer .edition-update{display:block;font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--muted);margin:0;padding:0 0 24px;overflow-wrap:anywhere}
+@media(max-width:680px){.masthead{display:flex;justify-content:center;padding-bottom:21px}.masthead .brand{grid-column:auto}.header-actions .icon-button{top:50%}}
+/* Footer timestamp end */
 
 /* Reader comfort: familiar newspaper hierarchy, legible credits and touch targets. */
 .article h2,.rail-card h3,.deck,.story-meta,.story-photo figcaption{overflow-wrap:anywhere}
@@ -103,3 +104,14 @@ html{line-height:1.5;-webkit-text-size-adjust:100%;tab-size:4}h1,h2,h3,p,figure{
 @media(max-width:360px){#discussion-highlights{padding-left:16px;padding-right:16px}#discussion-highlights[data-enhanced] .highlight-slides{margin-right:-16px}.highlight-heading h2{font-size:25px}}
 :root[data-theme=dark] #discussion-highlights{--highlight-paper:#1b1b19;--highlight-rule:#4b4943}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]) #discussion-highlights{--highlight-paper:#1b1b19;--highlight-rule:#4b4943}}
+
+/* Snapshot-relative section collections. */
+.section-fallback details{margin:16px 0}.section-fallback summary{cursor:pointer;padding:12px 0;font-weight:700}
+
+/* Technology trials equal-sized previews without flattening the lead hierarchy. */
+.technology-grid-desk .desk-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr;gap:20px}
+.technology-grid-desk .desk-briefs{display:contents}
+.technology-grid-desk .desk-layout>.article,.technology-grid-desk .desk-briefs>.article{margin:0;padding:16px 0;border:0;border-top:1px solid var(--line);min-width:0}
+.technology-grid-desk .desk-layout .deck{margin:8px 0;line-height:1.4}
+.technology-grid-desk .desk-layout .story-meta{margin-top:8px}
+@media(max-width:600px){.technology-grid-desk .desk-layout{grid-template-columns:1fr;grid-auto-rows:auto;gap:8px}}

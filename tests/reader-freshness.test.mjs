@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'ht-reader-freshness-'));
+try{
+ const out=path.join(tmp,'reader.mjs');
+ await build({stdin:{contents:"export * from './web/reader'; export {renderEdition} from './lib/render-edition';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:out});
+ const {sectionStories,filterStories,readerURL,readerLocation,renderEdition}=await import(pathToFileURL(out));
+ const generatedAt='2026-11-07T12:00:00Z',at=Date.parse(generatedAt)/1000;
+ const stories=[0,1,7*86400-1,7*86400,30*86400,30*86400+1,-1].map((age,i)=>({id:i+1,time:at-age,category:'Technology',topics:['AI'],headline:'Story '+i,title:'Story '+i,summary:'',summarySource:'unavailable',publisher:'Example',url:'https://example.com/'+i,score:100,comments:20,editorialScore:100-i,placement:i===0?'lead':'section-only'}));
+ assert.deepEqual(sectionStories(stories,'Technology','',generatedAt).map(s=>s.id),[2,3,4,5]);
+ assert.deepEqual(sectionStories(stories,'AI','',generatedAt,'earlier').map(s=>s.id),[2,3,4,5]);
+ assert.deepEqual(sectionStories(stories,'Today','Story',generatedAt).map(s=>s.id),[2,3,4,5]);
+ assert.equal(filterStories(stories,'Technology','').length,7,'legacy sections remain unfiltered');
+ const href='https://paper.example/?date=2026-11-06&section=Technology';
+ const earlier=readerURL(href,'Technology','','earlier');
+ assert.deepEqual(readerLocation('https://paper.example'+earlier),{section:'Technology',query:''});
+ assert.equal(new URL(earlier,'https://paper.example').searchParams.get('date'),'2026-11-06');
+ assert.equal(new URL(readerURL(href,'Today','','earlier'),'https://paper.example').searchParams.has('age'),false);
+ assert.equal(new URL(readerURL(earlier.includes('https:')?earlier:'https://paper.example'+earlier,'Technology',''),'https://paper.example').searchParams.has('age'),false);
+ const edition={generatedAt,layoutVersion:3,freshnessPolicyVersion:1,stories:stories.slice(0,5),ranking:'Test',candidateCount:5};
+ const html=renderEdition(edition,'fresh-test');
+ assert.match(html,/"freshnessPolicyVersion":1/);assert.doesNotMatch(html,/id="section-age-controls"|Earlier this month|Past seven days|filtered-description/);assert.match(html,/<noscript>/);assert.doesNotMatch(html.match(/<noscript>([\s\S]*?)<\/noscript>/)[1],/data-story-id="1"/,'no-JS excludes exact snapshot timestamp');
+ assert.doesNotMatch(html,/HN submission ages are measured at this edition/);
+ const legacy=renderEdition({...edition,freshnessPolicyVersion:undefined},'legacy-test');
+ assert.doesNotMatch(legacy,/id="section-age-controls"|<noscript>/);
+ const deskEdition={...edition,stories:[stories[0],...stories.slice(1,4).map(s=>({...s,placement:'section'}))]};
+ assert.match(renderEdition(deskEdition,'desk-test'),/topic-desk technology-grid-desk/);
+ console.log('PASS reader freshness: exact 7/30-day boundaries, snapshot age, topic aliases, search collection, URL/archive state, legacy gate, no-JS access and Technology-only grid markup.');
+}finally{fs.rmSync(tmp,{recursive:true,force:true});}

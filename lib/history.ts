@@ -1,10 +1,10 @@
 import {categories} from './contracts';
-import {classifyTopicV3,monthPolicyConfig,monthScore} from './policy';
+import {classifyTopicV4,monthPolicyConfig,freshSectionScore,unifiedSectionPolicyConfig} from './policy';
 import {boundedBody,RequestError} from './security';
 
 // Discovery is a bounded index sample, not an exhaustive archive. Only official
 // Firebase item responses may supply the published scores and story metadata.
-export const historyLimits={maxRequests:6,maxHitsPerRequest:100,maxDiscoveredIds:600,maxHistoricalIds:164,maxOfficialItems:254,maxResponseBytes:250_000,requestTimeoutMs:15_000} as const;
+export const historyLimits={maxRequests:13,maxHitsPerRequest:100,maxDiscoveredIds:1300,maxHistoricalIds:164,maxOfficialItems:254,maxResponseBytes:250_000,requestTimeoutMs:15_000} as const;
 const SEARCH_ORIGIN='https://hn.algolia.com';
 const RETRIEVE=['objectID','title','url','points','num_comments','created_at_i'];
 const queryPlan=[
@@ -14,6 +14,7 @@ const queryPlan=[
  {kind:'llm',endpoint:'search',query:'LLM'},
  {kind:'games',endpoint:'search',query:'game'},
  {kind:'chess',endpoint:'search',query:'chess'},
+ ...['science','physics','biology','history','music','business','economy'].map(query=>({kind:query,endpoint:'search' as const,query})),
 ] as const;
 export type HistoryHit={id:number;title:string;url?:string;score:number;comments:number;time:number};
 type HistoryWindow=ReturnType<typeof monthWindow>;
@@ -60,12 +61,16 @@ export function shortlistHistorical(hits:HistoryHit[],currentIds:readonly number
  for(const hit of hits)if(!current.has(hit.id)&&!unique.has(hit.id))unique.set(hit.id,hit);
  const pool=[...unique.values()];
  const maxPoints=Math.max(1,...pool.map(s=>s.score)),maxComments=Math.max(1,...pool.map(s=>s.comments));
- const ordered=pool.map(s=>({story:s,weight:monthScore(s,maxPoints,maxComments,atMs)})).sort((a,b)=>b.weight-a.weight||b.story.time-a.story.time||a.story.id-b.story.id).map(s=>s.story);
+ const ordered=pool.map(s=>({story:s,weight:freshSectionScore(s,maxPoints,maxComments,atMs,false,1)})).sort((a,b)=>b.weight-a.weight||b.story.time-a.story.time||a.story.id-b.story.id).map(s=>s.story);
  const selected=new Map<number,HistoryHit>();
  const take=(stories:HistoryHit[])=>{for(const s of stories)if(selected.size<historyLimits.maxHistoricalIds&&!selected.has(s.id))selected.set(s.id,s);};
- take(ordered.slice(0,60));
+ // Reserve topical coverage before global popularity can consume the bound.
+ for(const category of categories){
+  const desk=ordered.filter(s=>classifyTopicV4(s.title,s.url&&/^https?:\/\//i.test(s.url)?safeIndexUrl(s.url):hnItemUrl(s.id))===category);
+  take(desk.slice(0,20));
+ }
  take([...pool].sort((a,b)=>b.time-a.time||a.id-b.id).slice(0,20));
- for(const category of categories)take(ordered.filter(s=>classifyTopicV3(s.title,s.url&&/^https?:\/\//i.test(s.url)?safeIndexUrl(s.url):hnItemUrl(s.id))===category).slice(0,12));
+ take(ordered);
  return [...selected.values()];
 }
 function hnItemUrl(id:number){return 'https://news.ycombinator.com/item?id='+id;}

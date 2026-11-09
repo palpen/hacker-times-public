@@ -1,6 +1,7 @@
+import {normalizeArticleUrl} from './lead-retirement';
 import {categories,legacyV2Ranking,type Story,type Edition,type SourceSnapshot} from './contracts';
 import {layoutCapacity,layoutContract} from './layout';
-import {rankByPoints,ranking} from './policy';
+import {rankByPoints,ranking,isRecentSectionStory,qualifiesForTodayPreview} from './policy';
 // Compatibility exports keep existing callers stable while policy has one home.
 export * from './contracts';
 export {rankByPoints,ranking,classifyTopic,selectStories} from './policy';
@@ -38,13 +39,21 @@ export function validateEdition(input:unknown,previous?:Edition,snapshot?:Source
   // Never rerun today's policy over an in-flight draft.
   const expected=snapshot.selectedStories;
   if(!Array.isArray(expected)||!expected.length||expected.length>capacity.total||new Set(expected.map(s=>s.id)).size!==expected.length)throw Error('Invalid pinned selection.');
-  if(snapshot.schemaVersion===1&&(!((snapshot.selectionVersion===1&&snapshot.layoutVersion===1)||(snapshot.selectionVersion===2&&snapshot.layoutVersion===2)||(snapshot.selectionVersion===3&&[1,2].includes(snapshot.layoutVersion??0)&&['hn-balanced-lead-v1','hn-balanced-lead-v2'].includes(snapshot.leadPolicyVersion??'')&&snapshot.leadPlan))||!snapshot.policyVersion||!snapshot.basePublicationVersion))throw Error('Unsupported selection contract.');
-  if(expected[0].placement!=='lead'||expected.filter(s=>s.placement==='lead').length!==1||!snapshot.frontPageIds.includes(expected[0].id)||expected.filter(s=>s.placement==='top').length>capacity.top||expected.some(s=>!['lead','top','discussion','section'].includes(s.placement||'')||!contract.categories.some(c=>c===s.category)))throw Error('Selection does not fit its saved reader layout.');
-  if(snapshot.selectionVersion===2||(snapshot.selectionVersion===3&&snapshot.layoutVersion===2)){
+  if(snapshot.schemaVersion===1&&(!((snapshot.selectionVersion===1&&snapshot.layoutVersion===1)||(snapshot.selectionVersion===2&&snapshot.layoutVersion===2)||([3,4,5,6].includes(snapshot.selectionVersion??0)&&((snapshot.selectionVersion===3&&[1,2].includes(snapshot.layoutVersion??0))||([4,5,6].includes(snapshot.selectionVersion??0)&&snapshot.layoutVersion===3))&&['hn-balanced-lead-v1','hn-balanced-lead-v2'].includes(snapshot.leadPolicyVersion??'')&&snapshot.leadPlan))||!snapshot.policyVersion||!snapshot.basePublicationVersion))throw Error('Unsupported selection contract.');
+  if(expected[0].placement!=='lead'||expected.filter(s=>s.placement==='lead').length!==1||!snapshot.frontPageIds.includes(expected[0].id)||expected.filter(s=>s.placement==='top').length>capacity.top||expected.some(s=>!['lead','top','discussion','section',...(snapshot.layoutVersion===3?['section-only']:[])].includes(s.placement||'')||!contract.categories.some(c=>c===s.category)))throw Error('Selection does not fit its saved reader layout.');
+  if(snapshot.selectionVersion===2||([3,4,5,6].includes(snapshot.selectionVersion??0)&&[2,3].includes(snapshot.layoutVersion??0))){
    const start=Date.parse(snapshot.windowStart||''),end=Date.parse(snapshot.windowEnd||'');
    if(snapshot.sourceMode!=='hn-month-sample'||end!==stamp||start!==end-30*86_400_000||snapshot.algorithmVersion!==3||!snapshot.discovery||snapshot.discovery.coverage!=='sampled')throw Error('Invalid monthly source provenance.');
    if(expected.slice(1).some(s=>s.time*1000<start||s.time*1000>=end))throw Error('Secondary story outside the pinned month.');
   }
+  if([4,5,6].includes(snapshot.selectionVersion??0)&&(expected.filter(s=>s.placement!=='section-only').length>42||expected.filter(s=>s.placement==='discussion').length>6||categories.some(c=>expected.filter(s=>s.category===c).length>16||expected.filter(s=>s.category===c&&s.placement==='section').length>4)||new Set(expected.map(s=>normalizeArticleUrl(s.url))).size!==expected.length))throw Error('Invalid independent section plan');
+  if(snapshot.selectionVersion===5||snapshot.selectionVersion===6){
+   if(snapshot.freshnessPolicyVersion!==1||snapshot.policyVersion!==(snapshot.selectionVersion===6?'hn-month-unified-sections-v6':'hn-month-fresh-sections-v5'))throw Error('Invalid freshness policy contract');
+   const currentIds=new Set(snapshot.sourcePages.flatMap(p=>p.ids));
+   if(expected.slice(1).some(s=>s.placement!=='section-only'&&!isRecentSectionStory(s,stamp)))throw Error('Stale Today placement');
+   if(expected.some(s=>['section','discussion'].includes(s.placement||'')&&!qualifiesForTodayPreview(s,currentIds)))throw Error('Unqualified Today preview');
+   if(expected.some(s=>s.placement==='top'&&!snapshot.frontPageIds.includes(s.id)))throw Error('Top story outside current first page');
+  }else if(snapshot.freshnessPolicyVersion!==undefined)throw Error('Unexpected freshness policy');
   const sources=new Map(snapshot.rankedStories.map(s=>[s.id,s]));
   for(const selected of expected){const source=sources.get(selected.id);if(!source||['title','url','score','comments','time','hnRank','hnPage','category'].some(key=>selected[key as keyof typeof selected]!==source[key as keyof typeof source]))throw Error('Selection does not match source snapshot.');}
   if(expected.length!==stories.length)throw Error('Submit every selected story exactly once.');
@@ -56,5 +65,5 @@ export function validateEdition(input:unknown,previous?:Edition,snapshot?:Source
   if(stories[0].summarySource==='unavailable'&&previous.stories[0].headline!==stories[0].title)throw Error('Unavailable incumbent conflicts with preserved headline; reuse accurate verified copy or stop for review.');
   stories[0].headline=previous.stories[0].headline;
  }
- return {schemaVersion:1,...(snapshot?.selectionVersion?{selectionVersion:snapshot.selectionVersion}:{}),...(snapshot?.summaryPolicyVersion?{summaryPolicyVersion:snapshot.summaryPolicyVersion}:{}),...(snapshot?.leadPolicyVersion?{leadPolicyVersion:snapshot.leadPolicyVersion}:{}),layoutVersion:snapshot?snapshot.layoutVersion??1:undefined,policyVersion:snapshot?.policyVersion||(snapshot?'hn-balanced-v2':undefined),policyConfig:snapshot?.policyConfig,generatedAt:d.generatedAt,frontPageIds:snapshot?.frontPageIds||d.frontPageIds,frontPageUrl:'https://news.ycombinator.com/',sourcePages:snapshot?.sourcePages,...(snapshot?.windowStart?{windowStart:snapshot.windowStart,windowEnd:snapshot.windowEnd,discovery:snapshot.discovery}:{}),algorithmVersion:snapshot?.algorithmVersion,sourceMode:snapshot?.sourceMode||(snapshot?'hn-multi-page':'hn-front-page'),editionDate:new Date(stamp).toISOString().slice(0,10),candidateCount:snapshot?.candidateCount??(Number.isFinite(d.candidateCount)?d.candidateCount:stories.length),fetchedCount:snapshot?.fetchedCount??d.fetchedCount,ranking:snapshot?.ranking||(snapshot?legacyV2Ranking:ranking),stories};
+ return {schemaVersion:1,...(snapshot?.freshnessPolicyVersion?{freshnessPolicyVersion:snapshot.freshnessPolicyVersion}:{}),...(snapshot?.selectionVersion?{selectionVersion:snapshot.selectionVersion}:{}),...(snapshot?.summaryPolicyVersion?{summaryPolicyVersion:snapshot.summaryPolicyVersion}:{}),...(snapshot?.leadPolicyVersion?{leadPolicyVersion:snapshot.leadPolicyVersion}:{}),layoutVersion:snapshot?snapshot.layoutVersion??1:undefined,policyVersion:snapshot?.policyVersion||(snapshot?'hn-balanced-v2':undefined),policyConfig:snapshot?.policyConfig,generatedAt:d.generatedAt,frontPageIds:snapshot?.frontPageIds||d.frontPageIds,frontPageUrl:'https://news.ycombinator.com/',sourcePages:snapshot?.sourcePages,...(snapshot?.windowStart?{windowStart:snapshot.windowStart,windowEnd:snapshot.windowEnd,discovery:snapshot.discovery}:{}),algorithmVersion:snapshot?.algorithmVersion,sourceMode:snapshot?.sourceMode||(snapshot?'hn-multi-page':'hn-front-page'),editionDate:new Date(stamp).toISOString().slice(0,10),candidateCount:snapshot?.candidateCount??(Number.isFinite(d.candidateCount)?d.candidateCount:stories.length),fetchedCount:snapshot?.fetchedCount??d.fetchedCount,ranking:snapshot?.ranking||(snapshot?legacyV2Ranking:ranking),stories};
 }
