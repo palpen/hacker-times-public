@@ -10,7 +10,7 @@ export function publicUrl(value: unknown):value is string {
  if(typeof value!=='string'||value.length>2500||value.trim()!==value||/[\x00-\x20\x7f\\]/.test(value))return false;
  try{const u=new URL(value),h=u.hostname.toLowerCase();return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&(!u.port||['80','443'].includes(u.port))&&h.length<=253&&h.includes('.')&&!/^[\d.]+$/.test(h)&&h.split('.').every(label=>/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))&&!/(^|\.)(localhost|local|internal|test|invalid|lan|home|corp|localdomain|onion|arpa|svc)$/.test(h);}catch{return false;}
 }
-export function validateEdition(input:unknown,previous?:Edition,snapshot?:SourceSnapshot):Edition{
+export function validateEdition(input:unknown,previous?:Edition,snapshot?:SourceSnapshot,independentLeadVerified=false):Edition{
  const d=input as Edition;
  const contract=layoutContract(snapshot?.layoutVersion??1),capacity=contract.capacity;
  if(!d||typeof d!=='object'||Array.isArray(d)||!Array.isArray(d.stories)||d.stories.length<1||d.stories.length>capacity.total)throw Error('Expected 1–'+capacity.total+' editorial stories.');
@@ -39,7 +39,7 @@ export function validateEdition(input:unknown,previous?:Edition,snapshot?:Source
   // Never rerun today's policy over an in-flight draft.
   const expected=snapshot.selectedStories;
   if(!Array.isArray(expected)||!expected.length||expected.length>capacity.total||new Set(expected.map(s=>s.id)).size!==expected.length)throw Error('Invalid pinned selection.');
-  if(snapshot.schemaVersion===1&&(!((snapshot.selectionVersion===1&&snapshot.layoutVersion===1)||(snapshot.selectionVersion===2&&snapshot.layoutVersion===2)||([3,4,5,6].includes(snapshot.selectionVersion??0)&&((snapshot.selectionVersion===3&&[1,2].includes(snapshot.layoutVersion??0))||([4,5,6].includes(snapshot.selectionVersion??0)&&snapshot.layoutVersion===3))&&['hn-balanced-lead-v1','hn-balanced-lead-v2'].includes(snapshot.leadPolicyVersion??'')&&snapshot.leadPlan))||!snapshot.policyVersion||!snapshot.basePublicationVersion))throw Error('Unsupported selection contract.');
+  if(snapshot.schemaVersion===1&&(!((snapshot.selectionVersion===1&&snapshot.layoutVersion===1)||(snapshot.selectionVersion===2&&snapshot.layoutVersion===2)||([3,4,5,6].includes(snapshot.selectionVersion??0)&&((snapshot.selectionVersion===3&&[1,2].includes(snapshot.layoutVersion??0))||([4,5,6].includes(snapshot.selectionVersion??0)&&snapshot.layoutVersion===3))&&['hn-balanced-lead-v1','hn-balanced-lead-v2'].includes(snapshot.leadPolicyVersion??'')&&(snapshot.leadPlan||independentLeadVerified)))||!snapshot.policyVersion||!snapshot.basePublicationVersion))throw Error('Unsupported selection contract.');
   if(expected[0].placement!=='lead'||expected.filter(s=>s.placement==='lead').length!==1||!snapshot.frontPageIds.includes(expected[0].id)||expected.filter(s=>s.placement==='top').length>capacity.top||expected.some(s=>!['lead','top','discussion','section',...(snapshot.layoutVersion===3?['section-only']:[])].includes(s.placement||'')||!contract.categories.some(c=>c===s.category)))throw Error('Selection does not fit its saved reader layout.');
   if(snapshot.selectionVersion===2||([3,4,5,6].includes(snapshot.selectionVersion??0)&&[2,3].includes(snapshot.layoutVersion??0))){
    const start=Date.parse(snapshot.windowStart||''),end=Date.parse(snapshot.windowEnd||'');

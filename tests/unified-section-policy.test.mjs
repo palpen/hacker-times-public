@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';
 const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'ht-unified-'));
+const realNow=Date.now;
 try{
 const out=path.join(tmp,'policy.mjs');await build({stdin:{contents:"export * from './lib/policy';export {validateEdition} from './lib/news';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:out});
 const {freshSectionScore:score,selectUnifiedMonthlyStories:select,unifiedSectionPolicyConfig:config,validateEdition}=await import(pathToFileURL(out));
 const at=Date.parse('2026-11-08T04:00:00.000Z'),sec=at/1000;
+Date.now=()=>at;
 const item=(id,days,points=100,comments=10,category='Science',url='https://example.org/'+id)=>({id,title:'Story '+id,url,score:points,comments,time:sec-days*86400,category,editorialScore:0});
 const lead=item(1,.01,100,10,'Technology');
 assert.equal(config.engagementDecayHalfLifeDays,1);
@@ -27,4 +29,4 @@ const stamp=new Date(at).toISOString(),snapshot={schemaVersion:1,selectionVersio
 const payload={generatedAt:stamp,stories:chosen.map(s=>({...s,headline:s.title,summary:'',shortSummary:'',summarySource:'unavailable',publisher:'Example'}))};
 assert.equal(validateEdition(payload,undefined,snapshot).selectionVersion,6);
 console.log('PASS unified v6: stronger decay, meaningful older engagement, no old reserve, no weak filler, deterministic reposts, valid new contract');
-}finally{fs.rmSync(tmp,{recursive:true,force:true});}
+}finally{Date.now=realNow;fs.rmSync(tmp,{recursive:true,force:true});}
