@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'ht-unified-'));
+const realNow=Date.now;
+try{
+const out=path.join(tmp,'policy.mjs');await build({stdin:{contents:"export * from './lib/policy';export {validateEdition} from './lib/news';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:out});
+const {freshSectionScore:score,selectUnifiedMonthlyStories:select,unifiedSectionPolicyConfig:config,validateEdition}=await import(pathToFileURL(out));
+const at=Date.parse('2026-11-08T04:00:00.000Z'),sec=at/1000;
+Date.now=()=>at;
+const item=(id,days,points=100,comments=10,category='Science',url='https://example.org/'+id)=>({id,title:'Story '+id,url,score:points,comments,time:sec-days*86400,category,editorialScore:0});
+const lead=item(1,.01,100,10,'Technology');
+assert.equal(config.engagementDecayHalfLifeDays,1);
+assert.equal(score(item(2,1),100,10,at,false,1),42.5);
+assert.equal(score(item(2,2),100,10,at,false,1),21.25);
+assert.ok(score(item(2,2,2000,500),2000,500,at,false,1)>score(item(3,1,20,0),2000,500,at,false,1),'meaningful older engagement can beat a newer modest story');
+const pool=[lead,...Array.from({length:30},(_,i)=>item(100+i,1,50,5)),...Array.from({length:8},(_,i)=>item(200+i,8+i,1000,500))];
+const selected=select(pool,[1],1,at,1);
+assert.equal(selected.filter(s=>s.category==='Science').length,16);
+assert.equal(selected.filter(s=>s.id>=200).length,0,'no guaranteed older reserve');
+const sparse=[lead,item(2,8,1000,500),item(3,1,1,0)];
+const chosen=select(sparse,[1],1,at,1);
+assert.ok(chosen.some(s=>s.id===2&&s.placement==='section-only'),'qualified older content can remain in sparse section');
+assert.ok(!chosen.some(s=>s.id===3),'no weak filler');
+assert.deepEqual(select([...pool].reverse(),[1],1,at,1),selected);
+const repost=select([lead,item(10,20,9000,9000,'Games','http://www.example.org/article/?utm_source=old'),item(11,1,60,12,'Games','https://example.org/article#new')],[1],1,at,1);
+assert.ok(repost.some(s=>s.id===11));assert.ok(!repost.some(s=>s.id===10));
+const stamp=new Date(at).toISOString(),snapshot={schemaVersion:1,selectionVersion:6,freshnessPolicyVersion:1,layoutVersion:3,summaryPolicyVersion:1,leadPolicyVersion:'hn-balanced-lead-v2',leadPlan:{},policyVersion:'hn-month-unified-sections-v6',basePublicationVersion:'base',generatedAt:stamp,windowStart:new Date(at-30*864e5).toISOString(),windowEnd:stamp,sourceMode:'hn-month-sample',algorithmVersion:3,discovery:{coverage:'sampled'},frontPageIds:[1],sourcePages:[{url:'https://news.ycombinator.com/',ids:[1]}],rankedStories:sparse,selectedStories:chosen};
+const payload={generatedAt:stamp,stories:chosen.map(s=>({...s,headline:s.title,summary:'',shortSummary:'',summarySource:'unavailable',publisher:'Example'}))};
+assert.equal(validateEdition(payload,undefined,snapshot).selectionVersion,6);
+console.log('PASS unified v6: stronger decay, meaningful older engagement, no old reserve, no weak filler, deterministic reposts, valid new contract');
+}finally{Date.now=realNow;fs.rmSync(tmp,{recursive:true,force:true});}

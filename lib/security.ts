@@ -1,14 +1,15 @@
 import {themeInitScript} from './theme';
 export class RequestError extends Error { constructor(message:string,public status=400){super(message);} }
 // Enforce byte and time limits before JSON.parse; Content-Length is only an early hint.
-export async function boundedBody(message:Request|Response,limit:number,timeout=15_000):Promise<string>{
+export async function boundedBytes(message:Request|Response,limit:number,timeout=15_000):Promise<Uint8Array>{
  const length=message.headers.get('content-length');if(length&&(!/^\d+$/.test(length)||Number(length)>limit))throw new RequestError('Request body too large',413);
- const reader=message.body?.getReader();if(!reader)return '';
+ const reader=message.body?.getReader();if(!reader)return new Uint8Array();
  const chunks:Uint8Array[]=[];let size=0;let timer:ReturnType<typeof setTimeout>|undefined;
  const expired=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{reject(new RequestError('Body read timed out',408));void reader.cancel().catch(()=>{});},timeout);});
- try{while(true){const {done,value}=await Promise.race([reader.read(),expired]);if(done)break;size+=value.byteLength;if(size>limit)throw new RequestError('Request body too large',413);chunks.push(value);}const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}
+ try{while(true){const {done,value}=await Promise.race([reader.read(),expired]);if(done)break;size+=value.byteLength;if(size>limit)throw new RequestError('Request body too large',413);chunks.push(value);}const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.byteLength;}return bytes;}
  finally{clearTimeout(timer);void reader.cancel().catch(()=>{});}
 }
+export async function boundedBody(message:Request|Response,limit:number,timeout=15_000):Promise<string>{return new TextDecoder('utf-8',{fatal:true}).decode(await boundedBytes(message,limit,timeout));}
 export async function jsonBody(request:Request,limit=160_000):Promise<Record<string,unknown>>{
  if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type')||''))throw new RequestError('Expected application/json',415);
  let value:unknown;try{value=JSON.parse(await boundedBody(request,limit));}catch(e){if(e instanceof RequestError)throw e;throw new RequestError('Invalid JSON');}

@@ -23,15 +23,19 @@ assert '<h1>Hacker Times</h1>' in page
 assert 'brand-readable' not in page+css and 'brand-gothic' not in page+css and 'UnifrakturCook' not in css+layout
 assert 'letter-spacing:0;word-spacing:normal' in css
 print('PASS: one unchanged licensed face, all glyphs, one unsplit text run, same weight/size, natural spacing, mobile fit, local preload.')
-timestamp_font=ImageFont.truetype('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',12)
+timestamp_paths=[Path('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf'),Path('/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf'),Path('/System/Library/Fonts/Supplemental/Arial.ttf'),Path('C:/Windows/Fonts/arial.ttf')]
+timestamp_path=next((p for p in timestamp_paths if p.is_file()),None)
+assert timestamp_path is not None,'Install Arial or Liberation Sans for geometry checks'
+timestamp_font=ImageFont.truetype(str(timestamp_path),12)
 # Liberation Sans is metrically compatible with Arial. This is a geometry check,
 # not an interactive browser rendering test; normal wrapping handles substitutes.
 longest='Last update: September 30, 2026 at 12:59 PM EDT'
 timestamp_width=timestamp_font.getlength(longest)
 for width in [320,360,375,390,420,430,680]:
  assert timestamp_width<=width-38,(width,timestamp_width)
-assert '.masthead .edition-update{grid-row:2;max-width:none' in css
-assert 'row-gap:8px' in css and 'overflow-wrap:anywhere' in css
-assert 'className="desktop-date edition-update"' in page
-assert 'Last update:' not in page[page.index('<footer>'):]
-print(f'PASS: 12px timestamp fits 320–680px phone content widths ({timestamp_width:.1f}px longest label); separate masthead row and wrapping; no footer duplicate. Browser rendering is separate.')
+assert 'footer .edition-update{' in css
+assert '.masthead .brand{grid-column:2}' in css and 'overflow-wrap:anywhere' in css
+assert 'className="edition-update footer-update"' in page
+assert 'Last update:' in page[page.index('<footer>'):]
+assert 'Last update:' not in page[page.index('<header'):page.index('</header>')]
+print(f'PASS: 12px timestamp fits 320–680px phone content widths ({timestamp_width:.1f}px longest label); footer placement and wrapping; no masthead duplicate. Browser rendering is separate.')

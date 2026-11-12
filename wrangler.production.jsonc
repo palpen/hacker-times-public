@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hacker-times-production",
+  "account_id": "dc81a3cb74492ea63c9f3e14f13711a2",
+  "main": "worker/production.ts",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "durable_objects": {"bindings": [{"name": "NEWSROOM", "class_name": "Newsroom"}]},
+  "migrations": [{"tag": "production-v1", "new_sqlite_classes": ["Newsroom"]}],
+  "vars": {
+    "MUTATIONS_ENABLED": "false",
+    "EDITORIAL_MODEL": "gpt-6-luna",
+    "MODEL_API_ENABLED": "false",
+    "AUTO_EDITORIAL_ENABLED": "false",
+    "MODEL_MAX_OUTPUT_TOKENS": "1024",
+    "MODEL_INPUT_USD_PER_MILLION": "0.125",
+    "MODEL_OUTPUT_USD_PER_MILLION": "0.50",
+    "MODEL_DAILY_LIMIT_MICRO_USD": "1000000",
+    "MODEL_MONTHLY_LIMIT_MICRO_USD": "5000000",
+    "LIVE_FETCH_ENABLED": "false",
+    "PUBLICATION_ENABLED": "false",
+    "SCHEDULE_ENABLED": "false"
+  },
+  "triggers": {"crons": []}
+}

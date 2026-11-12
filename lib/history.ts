@@ -1,10 +1,11 @@
 import {categories} from './contracts';
-import {classifyTopicV3,monthPolicyConfig,monthScore} from './policy';
-import {boundedBody,RequestError} from './security';
+import {classifyTopicV4,monthPolicyConfig,freshSectionScore,unifiedSectionPolicyConfig} from './policy';
+import {boundedBody} from './security';
+import {CollectionError,collectionFailure} from './collection-error';
 
 // Discovery is a bounded index sample, not an exhaustive archive. Only official
 // Firebase item responses may supply the published scores and story metadata.
-export const historyLimits={maxRequests:6,maxHitsPerRequest:100,maxDiscoveredIds:600,maxHistoricalIds:164,maxOfficialItems:254,maxResponseBytes:250_000,requestTimeoutMs:15_000} as const;
+export const historyLimits={maxRequests:13,maxHitsPerRequest:100,maxDiscoveredIds:1300,maxHistoricalIds:164,maxOfficialItems:254,maxResponseBytes:250_000,requestTimeoutMs:15_000} as const;
 const SEARCH_ORIGIN='https://hn.algolia.com';
 const RETRIEVE=['objectID','title','url','points','num_comments','created_at_i'];
 const queryPlan=[
@@ -14,10 +15,11 @@ const queryPlan=[
  {kind:'llm',endpoint:'search',query:'LLM'},
  {kind:'games',endpoint:'search',query:'game'},
  {kind:'chess',endpoint:'search',query:'chess'},
+ ...['science','physics','biology','history','music','business','economy'].map(query=>({kind:query,endpoint:'search' as const,query})),
 ] as const;
 export type HistoryHit={id:number;title:string;url?:string;score:number;comments:number;time:number};
 type HistoryWindow=ReturnType<typeof monthWindow>;
-function fail(message:string):never {throw new RequestError('Historical HN discovery '+message+'; keep the previous edition.',502);}
+function fail(message:string):never {throw new CollectionError('Historical HN discovery '+message+'; keep the previous edition.',{phase:'history',reason:'payload',upstreamStatus:null});}
 function object(value:unknown):value is Record<string,unknown>{return !!value&&typeof value==='object'&&!Array.isArray(value);}
 function nonnegative(value:unknown):value is number{return Number.isSafeInteger(value)&&Number(value)>=0;}
 
@@ -60,12 +62,16 @@ export function shortlistHistorical(hits:HistoryHit[],currentIds:readonly number
  for(const hit of hits)if(!current.has(hit.id)&&!unique.has(hit.id))unique.set(hit.id,hit);
  const pool=[...unique.values()];
  const maxPoints=Math.max(1,...pool.map(s=>s.score)),maxComments=Math.max(1,...pool.map(s=>s.comments));
- const ordered=pool.map(s=>({story:s,weight:monthScore(s,maxPoints,maxComments,atMs)})).sort((a,b)=>b.weight-a.weight||b.story.time-a.story.time||a.story.id-b.story.id).map(s=>s.story);
+ const ordered=pool.map(s=>({story:s,weight:freshSectionScore(s,maxPoints,maxComments,atMs,false,1)})).sort((a,b)=>b.weight-a.weight||b.story.time-a.story.time||a.story.id-b.story.id).map(s=>s.story);
  const selected=new Map<number,HistoryHit>();
  const take=(stories:HistoryHit[])=>{for(const s of stories)if(selected.size<historyLimits.maxHistoricalIds&&!selected.has(s.id))selected.set(s.id,s);};
- take(ordered.slice(0,60));
+ // Reserve topical coverage before global popularity can consume the bound.
+ for(const category of categories){
+  const desk=ordered.filter(s=>classifyTopicV4(s.title,s.url&&/^https?:\/\//i.test(s.url)?safeIndexUrl(s.url):hnItemUrl(s.id))===category);
+  take(desk.slice(0,20));
+ }
  take([...pool].sort((a,b)=>b.time-a.time||a.id-b.id).slice(0,20));
- for(const category of categories)take(ordered.filter(s=>classifyTopicV3(s.title,s.url&&/^https?:\/\//i.test(s.url)?safeIndexUrl(s.url):hnItemUrl(s.id))===category).slice(0,12));
+ take(ordered);
  return [...selected.values()];
 }
 function hnItemUrl(id:number){return 'https://news.ycombinator.com/item?id='+id;}
@@ -78,10 +84,10 @@ export async function discoverHistory(atMs:number,currentIds:readonly number[]){
   let response:Response|undefined;
   try{
    response=await fetch(plan.url,{redirect:'manual',headers:{accept:'application/json'},signal:AbortSignal.timeout(historyLimits.requestTimeoutMs)});
-   if(response.status!==200||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))fail('is unavailable');
+   if(response.status!==200||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw new CollectionError('Historical HN discovery is unavailable; keep the previous edition.',{phase:'history',reason:response.status!==200?'http':'content_type',upstreamStatus:response.status});
    const body=await boundedBody(response,historyLimits.maxResponseBytes,historyLimits.requestTimeoutMs);
    return parseHistoryResponse(JSON.parse(body),window);
-  }catch(error){if(error instanceof RequestError&&error.status===502)throw error;fail('failed or exceeded a response limit');}
+  }catch(error){throw collectionFailure(error,'history','Historical HN discovery failed or exceeded a response limit; keep the previous edition.');}
   finally{void response?.body?.cancel().catch(()=>{});}
  }));
  const hits=responses.flat(),discoveredCount=new Set(hits.map(s=>s.id)).size;

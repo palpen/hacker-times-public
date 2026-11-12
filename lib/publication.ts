@@ -2,13 +2,15 @@ import type {Edition} from './news';
 import {validateLeadState,verifyLeadState,readLeadBoundary,validatePublicationBoundary,type LeadState,type LeadPlan,type LeadBoundary} from './lead-state';
 import {renderEdition} from './render-edition';
 import {editionAssets} from './edition-assets';
+import {withSubmissionAges} from './submission-age-document';
+import {withFooterTimestamp} from './footer-timestamp';
 import bundledEdition from '../data/published-seed.json';
 import bundledHTML from '../data/prebuilt.html?raw';
 import bundledVersion from '../data/prebuilt-version.json';
 export const PUBLICATION_KEY='publication/current.json';
 const BACKUP_KEY='publication/last-valid.json';const TTL=30_000;
 export type DocumentRecord={version:string;edition:Edition;html:string};
-export type Publication={schema:1;current:DocumentRecord;previous?:string;archives:Record<string,string>;leadState?:LeadState;leadBoundary?:LeadBoundary};
+export type Publication={schema:1;current:DocumentRecord;previous?:string;archives:Record<string,string>;editorialSafetyStop?:{kind:unknown;generatedAt:string;storyId?:unknown;recordedAt:string};leadState?:LeadState;leadBoundary?:LeadBoundary};
 const fallback:Publication={schema:1,current:{version:bundledVersion.version,edition:bundledEdition as Edition,html:bundledHTML},archives:{}};
 let memory:{value:Publication;until:number}|undefined;
 function valid(p:unknown):p is Publication{const v=p as Publication;return !!v&&v.schema===1&&typeof v.current?.version==='string'&&v.current.version.length<150&&typeof v.current.html==='string'&&v.current.html.startsWith('<!doctype html>')&&v.current.html.includes(`content="${v.current.version}"`)&&Array.isArray(v.current.edition?.stories)&&v.current.edition.stories.length>0&&Number.isFinite(Date.parse(v.current.edition.generatedAt))&&typeof v.archives==='object';}
@@ -44,6 +46,7 @@ export async function publishEdition(request:Request,env:Cloudflare.Env,edition:
  edition={...edition};delete edition.persisted;
  const oldObject=await env.BUCKET.get(PUBLICATION_KEY);const old=oldObject?await oldObject.json<Publication>():undefined;
  if(old&&!valid(old))throw Error('Current publication invalid; refusing to overwrite it.');
+ if(old?.editorialSafetyStop)throw Error('Publication is stopped for safety review; no alternate publication or rebuild is permitted.');
  const boundary=await readLeadBoundary(env.BUCKET);
  if(boundary&&!old)throw Error('Current publication is missing after lead activation; restore required state.');
  if(old)validatePublicationBoundary(old,boundary);
@@ -92,6 +95,6 @@ export async function documentResponse(request:Request,env:Cloudflare.Env):Promi
  const start=performance.now();let record:DocumentRecord;let source:string;const date=url.searchParams.get('date');
  if(date){if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return new Response('Invalid date',{status:400,headers:{'Cache-Control':'private,no-store'}});const archived=await readArchive(request,env,date);if(!archived)return new Response('Edition not found',{status:404,headers:{'Cache-Control':'private,no-store'}});record=archived;source='archive';}
  else {const result=await readPublication(request,env,url.searchParams.get('refresh')==='1');record=result.publication.current;source=result.source;}
- return new Response(request.method==='HEAD'?null:record.html,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Edition-Version':record.version,'X-Edition-Cache':source,'Server-Timing':`edition;dur=${Math.max(0,performance.now()-start).toFixed(2)};desc="document lookup, not network or browser paint"`}});
+ return new Response(request.method==='HEAD'?null:withFooterTimestamp(withSubmissionAges(record.html,record.edition)),{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Edition-Version':record.version,'X-Edition-Cache':source,'Server-Timing':`edition;dur=${Math.max(0,performance.now()-start).toFixed(2)};desc="document lookup, not network or browser paint"`}});
 }
 export function resetPublicationMemoryForTest(){memory=undefined;}
