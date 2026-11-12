@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';import {build} from 'esbuild';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-production-'));
 const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
-fs.writeFileSync(entry,`export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
+fs.writeFileSync(entry,`export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
 const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true});
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>x.endsWith('lib/production/auth.ts')),'removed auth module must not enter production bundle');
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>/data\/|lib\/(publication|editor|editorial-staging|lead-state)\.ts/.test(x)),'independent backend must not bundle old data/managed writer');
@@ -196,7 +196,7 @@ test('bounded automatic runs resume checkpoints and progress past unknown model 
  const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
  const first=f.selectedStories[0];await author(s,f,first);
  const source=await s.call('get-source',{generatedAt:f.generatedAt,id:first.id});
- const key=await api.digest({policy:'editorial-v2-manual-redirect',model:'gpt-6-luna',maxOutputTokens:1024,id:first.id,title:first.title,url:first.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:first.id,title:first.title,url:first.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
  await s.call('model-reserve',{key,cost:66560,dailyLimit:1_000_000,monthlyLimit:1_000_000});
  for(const row of f.selectedStories.slice(1)){
   const unavailable={id:row.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};
@@ -235,9 +235,9 @@ test('durable alarms continue healthy chunks promptly and back off blocked batch
 });
 test('real workerd alarms finish bounded chunks through the private namespace',async()=>{
  const file=path.join(dir,'alarm-worker.mjs');await build({entryPoints:['worker/production.ts'],outfile:file,bundle:true,format:'esm',platform:'browser'});
- const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`export default {async fetch(request){
- const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);
- return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
+ const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`const attempts=new Map();export default {async fetch(request){
+ const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);const attempt=attempts.get(data.originalTitle)||0;attempts.set(data.originalTitle,attempt+1);
+ return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:data.originalTitle==='Fictional system 0'&&attempt===0?'First fictional sentence. Second fictional sentence.':'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
  }};`}]}));
  try{
   const ns=await mf.getDurableObjectNamespace('NEWSROOM'),stub=ns.get(ns.idFromName('production-v1'));
@@ -249,6 +249,7 @@ test('real workerd alarms finish bounded chunks through the private namespace',a
   do{await new Promise(resolve=>setTimeout(resolve,250));status=await call('status');}while(status.pending&&Date.now()<deadline);
   assert.equal(status.pending,null,'actual durable alarms should continue without another cron tick');
   assert.equal((await call('edition')).edition.stories.length,f.selectedStories.length);
+  assert.equal((await call('status',{generatedAt:f.generatedAt})).failure.details.code,'short_summary_sentence','one deliberately invalid response was recovered automatically');
  }finally{await mf.dispose();}
 });
 test('entire public admin surface is404 without auth, body parsing or namespace access',async()=>{
@@ -328,4 +329,62 @@ test('alarm storage operations stay in-object rather than re-entering its namesp
  await s.newsroom.alarm();assert.equal((await s.call('status',{generatedAt:f.generatedAt})).staged,3);
  assert.equal((await s.call('status')).runner.leaseExpiresAt,null);
  assert.ok(s.storage.alarm<=Date.now()+1000);
+});
+
+test('confirmed output failures get bounded budgeted retries; unknown calls and unrelated keys stay blocked',async()=>{
+ const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ const row=f.selectedStories[0];await author(s,f,row);const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const args={key,cost:100,dailyLimit:300,monthlyLimit:500},failed={key,generatedAt:f.generatedAt,storyId:row.id,actualCost:30};
+ await s.call('model-reserve',args);
+ await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'transient',details:{phase:'timeout'}});
+ await assert.rejects(()=>s.call('model-failed',failed),/Confirmed output/);
+ await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'validation',details:{phase:'output',code:'copy_text'}});
+ await assert.rejects(()=>s.call('model-failed',{...failed,key:'a'.repeat(64)}),/pinned source/);
+ assert.equal((await s.call('model-failed',failed)).retryable,true);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,30);
+ const retry=await s.call('model-reserve',args);assert.equal(retry.created,true);assert.equal(retry.attempt,2);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,130);
+ assert.equal((await s.call('model-failed',{...failed,actualCost:20})).retryable,true);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,50);
+ assert.equal((await s.call('model-reserve',args)).attempt,3);
+ assert.equal((await s.call('model-failed',{...failed,actualCost:20})).retryable,false);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,70);
+ assert.equal((await s.call('model-reserve',args)).created,undefined);
+ assert.equal((await s.call('model-reserve',args)).state,'failed');
+});
+
+test('historical output recovery retains its full reservation and checks retry spending limits',async()=>{
+ const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});const row=f.selectedStories[0];await author(s,f,row);
+ const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const args={key,cost:100,dailyLimit:150,monthlyLimit:500};await s.call('model-reserve',args);
+ await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'validation',details:{phase:'output'}});
+ await s.call('model-failed',{key,generatedAt:f.generatedAt,storyId:row.id,retainReservation:true});
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,100);
+ await assert.rejects(()=>s.call('model-reserve',args),/budget limit/);
+ assert.equal((await s.call('model-reserve',{...args,dailyLimit:200})).attempt,2);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,200);
+});
+
+
+test('rate-limited publishers preserve selected links without invented summaries',async()=>{
+ const old=globalThis.fetch;const s=await setup(),f=snapshot(await s.call('root')),row=f.selectedStories[0];let calls=0;
+ try{globalThis.fetch=async()=>{calls++;return new Response('Rate limited',{status:429,headers:{'Retry-After':'1800'}});};
+  const source=await api.collectSource(f,row.id);assert.equal(source.kind,'unavailable');assert.equal(source.status,'temporarily_rate_limited');assert.equal(source.excerpt,'');assert.equal(source.url,row.url);assert.equal(calls,1);
+ }finally{globalThis.fetch=old;}
+});
+
+test('corrected validation reuses a retained draft without another model charge or request',async()=>{
+ const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});const row=f.selectedStories[0];await author(s,f,row);
+ const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ await s.call('model-reserve',{key,cost:100,dailyLimit:1000,monthlyLimit:2000});
+ const prior=await s.storage.get('model/'+key),draft={headline:row.title,summary:'A fictional system sorts paper.',shortSummary:'Lena Q. Finch describes a fictional system that sorts paper.',summarySource:'article'};
+ await s.storage.put('model/'+key,{...prior,state:'failed',attempt:3,retryable:true,draft});
+ for(const other of f.selectedStories.slice(1)){const value={id:other.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:other.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};value.fingerprint=await api.digest(value);await s.call('source',{generatedAt:f.generatedAt,source:value});}
+ const env={NEWSROOM:{idFromName:()=>0,get:()=>({fetch:async req=>s.request(new URL(req.url).pathname.slice(1),await req.json())})},AUTO_EDITORIAL_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+ const before=(await s.call('status')).modelBudget.dailyReservedMicroUsd;const result=await api.runEdition(env);assert.equal(result.blockedIds.length,0);
+ const staged=await s.storage.get('stage/'+f.generatedAt+'/'+row.id);assert.equal(staged.story.shortSummary,draft.shortSummary);
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,before);
 });

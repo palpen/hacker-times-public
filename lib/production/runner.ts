@@ -2,9 +2,10 @@ import {RequestError} from '../security';
 import {CollectionError,parseCollectionDetails} from '../collection-error';
 import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
-import {generateEditorialCopy,EditorialModelError,MAX_RESERVED_INPUT_TOKENS} from './editorial-model';
+import {generateEditorialCopy,reviewEditorialDraft,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
+class EditorialRetryError extends RequestError {constructor(){super('Invalid editorial output; a bounded accounted retry is available',503);}}
 type LocalRequest=(request:Request)=>Promise<Response>;
 type RunEnv=ProductionEnv & {_runToken?:string;_localRequest?:LocalRequest};
 export async function call(env:RunEnv,path:string,args:Record<string,unknown>={}){
@@ -53,17 +54,24 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
   const inputPrice=positiveConfig(env.MODEL_INPUT_USD_PER_MILLION,'Verified input price'),outputPrice=positiveConfig(env.MODEL_OUTPUT_USD_PER_MILLION,'Verified output price');
   const dailyLimit=positiveConfig(env.MODEL_DAILY_LIMIT_MICRO_USD,'Approved daily model spending limit',true),monthlyLimit=positiveConfig(env.MODEL_MONTHLY_LIMIT_MICRO_USD,'Approved monthly model spending limit',true);
   const cost=Math.ceil(MAX_RESERVED_INPUT_TOKENS*inputPrice+maxOutputTokens*outputPrice);
-  // v1 used an unsupported Workers redirect mode and could not send requests.
-  // Keep its conservative reservations; the corrected request has a new identity.
-  const key=await digest({policy:'editorial-v2-manual-redirect',model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
-  const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  // Request-policy identity includes the corrected transport and copy-format policy.
+  // Historical reservations remain counted and cannot be silently refunded.
+  const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+  const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
   if(reservation.state==='completed'&&reservation.result){
    result={...reservation.result,story:{...reservation.result.story,...selected}};
+  }else if(reservation.state==='failed'&&reservation.draft){
+   try{result=reviewEditorialDraft(source,selected,reservation.draft);}
+   catch{throw new RequestError('Retained editorial draft still fails validation; no API call made',409);}
   }else{
-   if(!reservation.created)throw new RequestError('Prior model call has an uncertain outcome; review usage before any retry',409);
+   if(!reservation.created)throw new RequestError(reservation.state==='failed'?'Editorial output retry limit reached':'Prior model call has an uncertain outcome; review usage before any retry',409);
    try{result=await generateEditorialCopy(source,selected,{apiKey:env.OPENAI_API_KEY,model,maxOutputTokens});}
    catch(error){
     await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient',details:error instanceof EditorialModelError?error.details:null});
+    if(error instanceof EditorialModelError&&error.kind==='validation'&&error.usage&&error.details?.phase==='output'){
+     const failed=await call(env,'model-failed',{key,generatedAt:source.generatedAt,storyId:selected.id,draft:error.draft,actualCost:Math.ceil(error.usage.inputTokens*inputPrice+error.usage.outputTokens*outputPrice)}) as {retryable:boolean};
+     if(failed.retryable)throw new EditorialRetryError();
+    }
     throw new RequestError(error instanceof EditorialModelError&&error.kind==='safety_stop'?'Editorial safety stop recorded; no retry or fallback':'Editorial generation failed; reservation retained for review',503);
    }
    await call(env,'model-complete',{key,result,actualCost:Math.ceil(result.usage.inputTokens*inputPrice+result.usage.outputTokens*outputPrice)});
@@ -88,7 +96,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   const before=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[];cursor:number|null};
   const allIds=snapshot.selectedStories.map(x=>x.id),cursor=before.cursor===null?-1:allIds.indexOf(before.cursor);
   const ordered=[...allIds.slice(cursor+1),...allIds.slice(0,cursor+1)].filter(id=>before.missingIds.includes(id));
-  const blockedIds:number[]=[];let attempted=0;
+  const blockedIds:number[]=[];let attempted=0,retryPending=false;
   for(const id of ordered){
    if(attempted>=3||Date.now()-started>=90_000)break;
    attempted++;
@@ -97,6 +105,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
    catch(error){
     const check=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {safetyStop:unknown};
     if(check.safetyStop)throw error;
+    if(error instanceof EditorialRetryError)retryPending=true;
     // Keep every required article. Independent missing articles may progress,
     // but unknown reservations are never retried and prevent complete publication.
     if(error instanceof RequestError&&(error.status===409||error.status===502||error.status===503)){blockedIds.push(id);continue;}
@@ -104,7 +113,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
    }
   }
   const after=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[]};
-  if(after.missingIds.length<before.missingIds.length)continuationDelayMs=1_000;
+  if(after.missingIds.length<before.missingIds.length||retryPending)continuationDelayMs=1_000;
   if(after.missingIds.length)return {published:false,generatedAt:snapshot.generatedAt,attempted,blockedIds,missingIds:after.missingIds,checkpoint:'staged'};
   const validation=await call(scoped,'validate',{generatedAt:snapshot.generatedAt});
   if(env.PUBLICATION_ENABLED!=='true')return {validation,published:false};

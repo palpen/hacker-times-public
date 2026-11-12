@@ -259,8 +259,10 @@ reuse v1's locally rejected attempts. Their old reservations remain counted
 conservatively; no history or budget records are deleted or refunded.
 
 Private failure status includes allowlisted phase, HTTP status and recognized
-provider error codes. It never stores provider prose, response bodies, headers,
-credentials or source evidence in diagnostics. Private root status exposes lease
+provider error codes. Diagnostic metadata excludes provider error bodies, headers
+and credentials. A bounded rejected editorial draft may be retained separately
+in its private model record for validator review; it is never written to logs or
+exposed through a public endpoint. Private root status exposes lease
 expiry and the last claimed schedule slot without the lease token. Public
 administration remains unavailable. Runtime regression coverage now executes
 both the adapter and the scheduled alarm path in workerd with a synthetic
@@ -273,3 +275,36 @@ collection batches always retain separate invocations to bound their external
 subrequest counts. This avoids the hosted self-call stall observed after the first
 article checkpoint. The runtime model-backed alarm test and a namespace-denial
 regression cover this path.
+
+## Output and publisher recovery
+
+Current request identity is `editorial-v3-normalized-copy`. Single-line formatting
+is requested explicitly; validated copy normalizes whitespace without changing
+words. Schema, provenance, character limits and the one-sentence short summary
+still apply. A confirmed output-validation failure with valid usage can receive
+up to two further attempts (three total). Each known charge is settled before the next maximum charge
+is reserved, and both attempts count toward the same spending limits. Unknown
+transport outcomes, authentication errors and safety refusals are not covered by
+this retry. Exhausted retries remain visible for investigation.
+
+Private `model-failed` recovery validates the stored failure, selected story,
+pinned source and request key. Historical output failures whose exact usage was
+not saved can retain their full charge before a bounded new attempt; the ledger
+is never erased. Per-story failure metadata survives later failures in a batch.
+
+Publisher HTML is byte- and time-bounded, then decoded using its declared charset
+or BOM; unlabelled pages try strict UTF-8 and then Windows-1252. JSON/API bodies
+remain strict UTF-8. A publisher HTTP429 keeps the selected original title and
+link with empty summaries (`temporarily_rate_limited`); the reader displays
+“Summary unavailable.” This prevents repeatedly fetching a rate-limited source
+within one edition, and does not omit the story or fabricate evidence. Transport
+errors and publisher 5xx responses still require a successful later fetch.
+
+
+The final live output blocker was a false sentence boundary at a middle initial
+in an author's name. Initials between names are masked for sentence segmentation
+only; publication preserves the original text. Genuine multiple sentences remain
+invalid. An exhausted, retained draft is revalidated against the pinned source
+and current output rules before use, without a new provider request or charge.
+The regression suite covers both unchanged name punctuation and rejecting a
+second real sentence, plus no-cost draft reuse through the runner.

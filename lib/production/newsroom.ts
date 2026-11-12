@@ -7,7 +7,7 @@ import {fetchOfficialItems} from '../reporting';
 import {CollectionError,parseCollectionDetails} from '../collection-error';
 import {pinSnapshot} from './selection';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
-import {parseModelFailureDetails} from './editorial-model';
+import {parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
@@ -97,7 +97,7 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/run-progress'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
     }
     if(path==='/collect-items'){
      hold(root);
@@ -117,13 +117,38 @@ export class Newsroom {
      hold(root);
      const key=String(args.key),cost=Number(args.cost),dailyLimit=Number(args.dailyLimit),monthlyLimit=Number(args.monthlyLimit);
      if(!/^[a-f0-9]{64}$/.test(key)||![cost,dailyLimit,monthlyLimit].every(x=>Number.isSafeInteger(x)&&x>0)||cost>dailyLimit||dailyLimit>monthlyLimit)throw new RequestError('Invalid approved model budget');
-     const prior=await tx.get('model/'+key);if(prior)return prior;
+     const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown}>('model/'+key);
+     if(prior&&!(prior.state==='failed'&&prior.retryable&&(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS))return prior;
      const now=new Date().toISOString(),day=now.slice(0,10),month=now.slice(0,7),daily=await tx.get<number>('budget/day/'+day)??0,monthly=await tx.get<number>('budget/month/'+month)??0;
      if(daily+cost>dailyLimit||monthly+cost>monthlyLimit)throw new RequestError('Model budget limit reached; no API call made',429);
      // Reserve before sending. Only validated provider usage may settle a charge.
-     // Never refund unknown usage or automatically repeat a reservation.
+     // Unknown calls stay reserved. Confirmed invalid output needs a fresh budgeted attempt.
      await tx.put('budget/day/'+day,daily+cost);await tx.put('budget/month/'+month,monthly+cost);
-     const reservation={state:'reserved',cost,day,month,createdAt:now};await tx.put('model/'+key,reservation);return {...reservation,created:true};
+     const reservation={state:'reserved',cost,day,month,createdAt:now,attempt:prior?(prior.attempt??1)+1:1,...(prior?{history:[...(prior.history??[]),{settledCost:prior.settledCost,details:prior.details}]}:{})};await tx.put('model/'+key,reservation);return {...reservation,created:true};
+    }
+    if(path==='/model-failed'){
+     hold(root);const key=String(args.key),at=stamp(args.generatedAt);
+     const snapshot=await snapshotAt(tx,at,root);
+     const failure=await tx.get<{kind:string;storyId?:number;details?:unknown}>('failure/'+at+'/'+args.storyId)??await tx.get<{kind:string;storyId?:number;details?:unknown}>('failure/'+at);
+     const details=parseModelFailureDetails(failure?.details);
+     if(!snapshot.selectedStories.some(x=>x.id===args.storyId)||failure?.storyId!==args.storyId||failure?.kind!=='validation'||details?.phase!=='output')throw new RequestError('Confirmed output validation failure required',409);
+     const selected=snapshot.selectedStories.find(x=>x.id===args.storyId)!;
+     const source=await tx.get<Source>(sourceKey(at,selected.id));
+     const expected=source?await digest({policy:EDITORIAL_REQUEST_POLICY,model:this.env?.EDITORIAL_MODEL||'gpt-6-luna',maxOutputTokens:Number(this.env?.MODEL_MAX_OUTPUT_TOKENS||1024),id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description}):null;
+     if(key!==expected)throw new RequestError('Failure reservation does not match pinned source',409);
+     const prior=await tx.get<{state:string;cost:number;day:string;month:string;attempt?:number}>('model/'+key);
+     if(!prior||prior.state!=='reserved')throw new RequestError('Unresolved model reservation required',409);
+     // Operator recovery can retain the full charge when historical token usage
+     // was not recorded. It never refunds or retries an unknown transport call.
+     const actualCost=args.retainReservation===true?prior.cost:Number(args.actualCost);
+     if(!Number.isSafeInteger(actualCost)||actualCost<0||actualCost>prior.cost)throw new RequestError('Invalid failed model accounting');
+     for(const budgetKey of ['budget/day/'+prior.day,'budget/month/'+prior.month]){
+      const total=await tx.get<number>(budgetKey);if(total===undefined||total<prior.cost)throw new RequestError('Budget accounting mismatch',503);
+      await tx.put(budgetKey,total-prior.cost+actualCost);
+     }
+     const draft=args.draft;
+     const checkedDraft=draft&&typeof draft==='object'&&Object.keys(draft).length===4&&['headline','summary','shortSummary','summarySource'].every(k=>typeof (draft as Record<string,unknown>)[k]==='string')&&JSON.stringify(draft).length<=2500?draft:undefined;
+     await tx.put('model/'+key,{...prior,state:'failed',retryable:true,settledCost:actualCost,details,...(checkedDraft?{draft:checkedDraft}:{})});return {retryable:(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS};
     }
     if(path==='/model-complete'){
      hold(root);const key=String(args.key),prior=await tx.get<{state:string;cost:number;day:string;month:string}>('model/'+key);
@@ -157,6 +182,14 @@ export class Newsroom {
      const {records,missing}=await stageRecords(tx,s);
      return {generatedAt:at,publicationVersion:root.version,baseCurrent:root.version===s.basePublicationVersion&&root.revision===s.baseRevision,safetyStop:root.safetyStop??null,selected:s.selectedStories.length,cursor:await tx.get('run/cursor/'+at)??null,staged:records.length,missingIds:missing,articles:records.map(x=>({id:x.story.id,revision:x.revision,summarySource:x.story.summarySource})),failure:await tx.get('failure/'+at)??null};
     }
+    if(path==='/model-review'){
+     await snapshotAt(tx,at,root);const selected=s.selectedStories.find(x=>x.id===args.storyId);
+     if(!selected)throw new RequestError('Article is not selected');
+     const source=await tx.get<Source>(sourceKey(at,selected.id));if(!source)throw new RequestError('Pinned source missing',404);
+     const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model:this.env?.EDITORIAL_MODEL||'gpt-6-luna',maxOutputTokens:Number(this.env?.MODEL_MAX_OUTPUT_TOKENS||1024),id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+     const record=await tx.get<{state:string;attempt?:number;details?:unknown;draft?:unknown}>('model/'+key);
+     return record?{state:record.state,attempt:record.attempt,details:record.details,draft:record.draft??null}:null;
+    }
     if(path==='/failure'){
      if(!['source_unavailable','transient','validation','safety_stop'].includes(String(args.kind)))throw new RequestError('Invalid failure kind');
      if(args.storyId!==undefined&&!s.selectedStories.some(x=>x.id===args.storyId))throw new RequestError('Failure is not in selected batch');
@@ -166,7 +199,7 @@ export class Newsroom {
       if(!root.safetyStop){root.safetyStop={...failure,kind:'safety_stop'};root.revision++;await writeBlob(tx,'root',root);}
       await tx.deleteAlarm();return {recorded:true,safetyStop:root.safetyStop};
      }
-     hold(root);await tx.put('failure/'+at,failure);return {recorded:true,published:false};
+     hold(root);await tx.put('failure/'+at,failure);if(args.storyId!==undefined)await tx.put('failure/'+at+'/'+args.storyId,failure);return {recorded:true,published:false};
     }
     await snapshotAt(tx,at,root);
     if(path==='/selection')return s;

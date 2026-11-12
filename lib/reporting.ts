@@ -1,4 +1,4 @@
-import {boundedBody,RequestError} from './security';
+import {boundedBody,boundedBytes,RequestError} from './security';
 import {CollectionError,collectionFailure} from './collection-error';
 import { publicUrl, ranking, classifyTopic, selectStories, type Candidate } from './news';
 import {policyVersion,policyConfig,monthPolicyVersion,monthPolicyConfig,monthRanking,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig,unifiedSectionRanking,classifyTopicV4,topicTags,selectUnifiedMonthlyStories} from './policy';
@@ -11,7 +11,15 @@ async function json(path:string) {const r=await fetch(API+path,{redirect:'manual
 function decode(text:string){return text.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>Number(n)<=0x10ffff?String.fromCodePoint(Number(n)):'�').replace(/\s+/g,' ').trim();}
 function attr(tag:string,name:string){const m=tag.match(new RegExp('(?:^|\\s)'+name+'\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))','i'));return decode(m?.[1]??m?.[2]??m?.[3]??'');}
 function meta(html:string,names:string[]){for(const tag of html.match(/<meta\s[^>]*>/gi)||[]){if(names.includes((attr(tag,'property')||attr(tag,'name')).toLowerCase()))return attr(tag,'content');}return '';}
-async function boundedText(response:Response){return boundedBody(response,1_500_000);}
+async function boundedText(response:Response){
+ const bytes=await boundedBytes(response,1_500_000);
+ // Publisher HTML may use legacy encodings; API/JSON decoding stays strict UTF-8.
+ const sample=new TextDecoder().decode(bytes.subarray(0,1024));
+ const declared=response.headers.get('content-type')?.match(/charset\s*=\s*["']?([a-zA-Z0-9_-]+)/i)?.[1]||sample.match(/<meta\b[^>]*charset\s*=\s*["']?([a-zA-Z0-9_-]+)/i)?.[1];
+ const bom=bytes[0]===0xef&&bytes[1]===0xbb&&bytes[2]===0xbf?'utf-8':bytes[0]===0xff&&bytes[1]===0xfe?'utf-16le':bytes[0]===0xfe&&bytes[1]===0xff?'utf-16be':null;
+ if(bom||declared)return new TextDecoder(bom||declared,{fatal:true}).decode(bytes);
+ try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return new TextDecoder('windows-1252',{fatal:true}).decode(bytes);}
+}
 // Lexical defense is not DNS pinning. Use only Workers global fetch: no private network bindings.
 export function publicFetchUrl(url:string){if(!publicUrl(url))return false;return !/(^|\.)chatgpt\.site$/.test(new URL(url).hostname);}
 export async function safeFetch(url:string):Promise<{response:Response;finalUrl:string}>{let current=url;for(let n=0;n<4;n++){if(!publicFetchUrl(current))throw new Error('URL is not an allowed public web address');const response=await fetch(current,{headers:{'user-agent':USER_AGENT,'accept':'text/html,application/xhtml+xml'},redirect:'manual',signal:AbortSignal.timeout(10000)});if(response.status>=300&&response.status<400){const location=response.headers.get('location');void response.body?.cancel().catch(()=>{});if(!location)throw new Error('Redirect without location');current=new URL(location,current).href;continue;}return {response,finalUrl:current};}throw new Error('Too many redirects');}

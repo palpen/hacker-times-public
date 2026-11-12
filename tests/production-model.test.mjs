@@ -10,7 +10,7 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ht-model-'));
 const output = path.join(directory, 'model.mjs');
 await build({ entryPoints: ['lib/production/editorial-model.ts'], outfile: output, bundle: true, platform: 'node', format: 'esm' });
 const { generateEditorialCopy, EditorialModelError, MAX_RESERVED_INPUT_TOKENS, MAX_MODEL_OUTPUT_TOKENS,
-  DEFAULT_EDITORIAL_MODEL, MODEL_REQUEST_TIMEOUT_MS } = await import(pathToFileURL(output));
+  DEFAULT_EDITORIAL_MODEL, MODEL_REQUEST_TIMEOUT_MS, reviewEditorialDraft } = await import(pathToFileURL(output));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error('Live network forbidden in fictional model tests'); };
 test.after(() => { globalThis.fetch = originalFetch; fs.rmSync(directory, { recursive: true, force: true }); });
@@ -249,7 +249,7 @@ test('rejects wrong provenance, extra/missing fields, overlength copy, control t
   const missingSummary = { ...copy };
   delete missingSummary.summary;
   const invalid = [missingSummary, null, [], 'Synthetic prose', { ...copy, headline: '' }, { ...copy, summary: '' },
-    { ...copy, shortSummary: '' }, { ...copy, summary: ' Untrimmed fictional prose.' }, { ...copy, summary: 'First line.\nSecond line.' },
+    { ...copy, shortSummary: '' }, { ...copy, summary: 'Forbidden \u0000 control.' },
     { ...copy, shortSummary: 'First fictional sentence. Another fictional sentence.' }, { ...copy, shortSummary: 'An incomplete fictional fragment' },
     { ...copy, headline: 'a'.repeat(241) }, { ...copy, summary: 'a'.repeat(901) }, { ...copy, shortSummary: 'a'.repeat(280) + '.' },
     { ...copy, summarySource: 'hn_post' }, { ...copy, summarySource: 'page_description' }, { ...copy, summarySource: 'invented' },
@@ -329,4 +329,23 @@ test('real Workers runtime sends the model request and validates structured outp
  ]}));
  try{const r=await mf.dispatchFetch('https://fixture.example/');const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));assert.equal(result.story.headline,copy.headline);}
  finally{await mf.dispose();}
+});
+
+
+test('normalizes model presentation whitespace without changing words or provenance',async()=>{
+ const formatted={...copy,headline:'  '+copy.headline+' ',summary:'First fictional paragraph.\n\nSecond fictional paragraph.',shortSummary:'  A fictional\n system sorts paper.  '};
+ const result=await generateEditorialCopy(source,selected,config,provider(envelope(formatted)));
+ assert.equal(result.story.headline,copy.headline);assert.equal(result.story.summary,'First fictional paragraph. Second fictional paragraph.');
+ assert.equal(result.story.shortSummary,'A fictional system sorts paper.');assert.equal(result.story.summarySource,'article');
+});
+
+
+test('middle initials are not sentence endings; genuine multiple sentences still fail',async()=>{
+ const shortSummary='Lena Q. Finch describes a fictional system that sorts paper by color.';
+ const draft={...copy,shortSummary};
+ const result=await generateEditorialCopy(source,selected,config,provider(envelope(draft)));
+ assert.equal(result.story.shortSummary,shortSummary);
+ const reviewed=reviewEditorialDraft(source,selected,draft);assert.equal(reviewed.requested,false);assert.deepEqual(reviewed.usage,{inputTokens:0,outputTokens:0,totalTokens:0});assert.equal(reviewed.story.shortSummary,shortSummary);
+ await failure(provider(envelope({...copy,shortSummary:shortSummary+' A second sentence follows.'})),{kind:'validation'});
+ await failure(provider(envelope({...copy,shortSummary:'The fictional system sorts paper. Another sentence follows.'})),{kind:'validation'});
 });
