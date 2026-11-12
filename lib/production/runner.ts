@@ -48,7 +48,9 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
   const inputPrice=positiveConfig(env.MODEL_INPUT_USD_PER_MILLION,'Verified input price'),outputPrice=positiveConfig(env.MODEL_OUTPUT_USD_PER_MILLION,'Verified output price');
   const dailyLimit=positiveConfig(env.MODEL_DAILY_LIMIT_MICRO_USD,'Approved daily model spending limit',true),monthlyLimit=positiveConfig(env.MODEL_MONTHLY_LIMIT_MICRO_USD,'Approved monthly model spending limit',true);
   const cost=Math.ceil(MAX_RESERVED_INPUT_TOKENS*inputPrice+maxOutputTokens*outputPrice);
-  const key=await digest({policy:'editorial-v1',model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+  // v1 used an unsupported Workers redirect mode and could not send requests.
+  // Keep its conservative reservations; the corrected request has a new identity.
+  const key=await digest({policy:'editorial-v2-manual-redirect',model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
   const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
   if(reservation.state==='completed'&&reservation.result){
    result={...reservation.result,story:{...reservation.result.story,...selected}};
@@ -56,7 +58,7 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
    if(!reservation.created)throw new RequestError('Prior model call has an uncertain outcome; review usage before any retry',409);
    try{result=await generateEditorialCopy(source,selected,{apiKey:env.OPENAI_API_KEY,model,maxOutputTokens});}
    catch(error){
-    await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient'});
+    await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient',details:error instanceof EditorialModelError?error.details:null});
     throw new RequestError(error instanceof EditorialModelError&&error.kind==='safety_stop'?'Editorial safety stop recorded; no retry or fallback':'Editorial generation failed; reservation retained for review',503);
    }
    await call(env,'model-complete',{key,result,actualCost:Math.ceil(result.usage.inputTokens*inputPrice+result.usage.outputTokens*outputPrice)});

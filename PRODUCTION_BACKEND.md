@@ -243,3 +243,25 @@ continuation after one second; a blocked/no-progress chunk backs off thirty minu
 Completion or a safety hold cancels continuations. Alarm retries use the same lease,
 source evidence, stage checkpoints and no-replay model reservations. Disabling the
 schedule switch prevents alarm execution as well as cron execution.
+
+## Cloudflare model transport regression (2026-11-12)
+
+The original model adapter set Fetch `redirect: 'error'`. Cloudflare Workers
+rejects that option synchronously before dispatching the request, although Node's
+Fetch accepts it. A remote preview reproduced the error using an intentionally
+invalid diagnostic credential: ordinary POSTs reached OpenAI and returned 401;
+the original request options threw `Invalid redirect value` locally.
+
+The adapter now uses `redirect: 'manual'` and explicitly rejects every 3xx
+response, so an API credential is never forwarded to a redirect destination.
+Request identity is `editorial-v2-manual-redirect`: corrected requests do not
+reuse v1's locally rejected attempts. Their old reservations remain counted
+conservatively; no history or budget records are deleted or refunded.
+
+Private failure status includes allowlisted phase, HTTP status and recognized
+provider error codes. It never stores provider prose, response bodies, headers,
+credentials or source evidence in diagnostics. Private root status exposes lease
+expiry and the last claimed schedule slot without the lease token. Public
+administration remains unavailable. Runtime regression coverage now executes
+both the adapter and the scheduled alarm path in workerd with a synthetic
+provider service, in addition to Node unit tests.

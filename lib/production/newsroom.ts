@@ -7,6 +7,7 @@ import {fetchOfficialItems} from '../reporting';
 import {CollectionError,parseCollectionDetails} from '../collection-error';
 import {pinSnapshot} from './selection';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
+import {parseModelFailureDetails} from './editorial-model';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
@@ -150,7 +151,7 @@ export class Newsroom {
      if(!old)await writeBlob(tx,k,s);
      await tx.put('pending',s.generatedAt);return {generatedAt:s.generatedAt,selected:s.selectedStories.length,baseVersion:root.version,published:false};
     }
-    if(path==='/status'&&!args.generatedAt)return {publicationVersion:root.version,generatedAt:root.generatedAt??null,safetyStop:root.safetyStop??null,pending:await tx.get('pending')??null,modelBudget:{dailyReservedMicroUsd:await tx.get('budget/day/'+new Date().toISOString().slice(0,10))??0,monthlyReservedMicroUsd:await tx.get('budget/month/'+new Date().toISOString().slice(0,7))??0}};
+    if(path==='/status'&&!args.generatedAt)return {runner:{leaseExpiresAt:(await tx.get<{expiresAt:number}>('run/lease'))?.expiresAt??null,scheduleSlot:await tx.get('schedule/slot')??null},publicationVersion:root.version,generatedAt:root.generatedAt??null,safetyStop:root.safetyStop??null,pending:await tx.get('pending')??null,modelBudget:{dailyReservedMicroUsd:await tx.get('budget/day/'+new Date().toISOString().slice(0,10))??0,monthlyReservedMicroUsd:await tx.get('budget/month/'+new Date().toISOString().slice(0,7))??0}};
     const at=stamp(args.generatedAt),s=await readBlob<Snapshot>(tx,snapshotKey(at));if(!s)throw new RequestError('Saved selection not found',404);
     if(path==='/status'){
      const {records,missing}=await stageRecords(tx,s);
@@ -159,7 +160,8 @@ export class Newsroom {
     if(path==='/failure'){
      if(!['source_unavailable','transient','validation','safety_stop'].includes(String(args.kind)))throw new RequestError('Invalid failure kind');
      if(args.storyId!==undefined&&!s.selectedStories.some(x=>x.id===args.storyId))throw new RequestError('Failure is not in selected batch');
-     const failure={kind:args.kind,generatedAt:at,...(args.storyId!==undefined?{storyId:args.storyId as number}:{}),recordedAt:new Date().toISOString()};
+     const details=parseModelFailureDetails(args.details);
+     const failure={kind:args.kind,...(details?{details}:{}),generatedAt:at,...(args.storyId!==undefined?{storyId:args.storyId as number}:{}),recordedAt:new Date().toISOString()};
      if(args.kind==='safety_stop'){
       if(!root.safetyStop){root.safetyStop={...failure,kind:'safety_stop'};root.revision++;await writeBlob(tx,'root',root);}
       await tx.deleteAlarm();return {recorded:true,safetyStop:root.safetyStop};

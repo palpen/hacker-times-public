@@ -68,7 +68,7 @@ test('uses verified Luna identifier and bounded strict Responses request with ev
   const mock = provider(envelope(), 200, (url, options) => {
     assert.equal(url, 'https://api.openai.com/v1/responses');
     assert.equal(options.method, 'POST');
-    assert.equal(options.redirect, 'error');
+    assert.equal(options.redirect, 'manual');
     assert.equal(options.credentials, 'omit');
     assert.equal(options.headers.Authorization, 'Bearer ' + config.apiKey);
     assert.ok(options.signal instanceof AbortSignal);
@@ -295,4 +295,38 @@ test('invalid configuration or mismatched/bloated evidence is rejected before an
   const mock = provider();
   await failure(mock, { kind: 'validation', requested: false, accountingUncertain: false, usage: null }, { ...source, excerpt: '\u0000'.repeat(8500) });
   assert.equal(mock.calls(), 0);
+});
+
+test('failure diagnostics preserve status and known codes without provider prose or credentials', async () => {
+  const e=await failure(provider({error:{code:'insufficient_quota',message:config.apiKey+' '+source.excerpt}},429),{kind:'transient'});
+  assert.deepEqual(e.details,{phase:'http',httpStatus:429,code:'insufficient_quota'});
+  const redacted=await failure(provider({error:{code:config.apiKey,message:source.excerpt}},400),{kind:'validation'});
+  assert.deepEqual(redacted.details,{phase:'http',httpStatus:400});
+  const transport=await failure(async()=>{throw new Error(config.apiKey);},{kind:'transient'});
+  assert.deepEqual(transport.details,{phase:'transport'});
+});
+
+test('redirects are rejected instead of forwarding the model credential', async()=>{
+ for(const status of [301,302,307,308]){
+  const mock=provider('',status);
+  const error=await failure(mock,{kind:'validation',requested:true});
+  assert.deepEqual(error.details,{phase:'http',httpStatus:status});assert.equal(mock.calls(),1);
+ }
+});
+
+test('real Workers runtime sends the model request and validates structured output',async()=>{
+ const {Miniflare,convertV4MiniflareOptions}=await import('miniflare');
+ const entry=path.join(directory,'worker.ts'),bundle=path.join(directory,'worker.mjs');
+ fs.writeFileSync(entry,`import {generateEditorialCopy} from '${process.cwd()}/lib/production/editorial-model';
+ export default {async fetch(){try{return Response.json(await generateEditorialCopy(${JSON.stringify(source)},${JSON.stringify(selected)},${JSON.stringify(config)}));}catch(e){return Response.json({message:e.message,details:e.details},{status:500});}}};`);
+ await build({entryPoints:[entry],outfile:bundle,bundle:true,platform:'browser',format:'esm'});
+ const mf=new Miniflare(convertV4MiniflareOptions({rootPath:directory,workers:[
+  {name:'editorial',modules:true,scriptPath:bundle,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],outboundService:'provider'},
+  {name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`export default {async fetch(request){
+   if(request.url!=='https://api.openai.com/v1/responses'||request.headers.get('authorization')!==${JSON.stringify('Bearer '+config.apiKey)})throw new Error('Unexpected synthetic request');
+   return Response.json(${JSON.stringify(envelope())});
+  }};`}
+ ]}));
+ try{const r=await mf.dispatchFetch('https://fixture.example/');const result=await r.json();assert.equal(r.status,200,JSON.stringify(result));assert.equal(result.story.headline,copy.headline);}
+ finally{await mf.dispose();}
 });

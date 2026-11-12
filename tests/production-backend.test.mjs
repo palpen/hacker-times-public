@@ -196,7 +196,7 @@ test('bounded automatic runs resume checkpoints and progress past unknown model 
  const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
  const first=f.selectedStories[0];await author(s,f,first);
  const source=await s.call('get-source',{generatedAt:f.generatedAt,id:first.id});
- const key=await api.digest({policy:'editorial-v1',model:'gpt-6-luna',maxOutputTokens:1024,id:first.id,title:first.title,url:first.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const key=await api.digest({policy:'editorial-v2-manual-redirect',model:'gpt-6-luna',maxOutputTokens:1024,id:first.id,title:first.title,url:first.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
  await s.call('model-reserve',{key,cost:66560,dailyLimit:1_000_000,monthlyLimit:1_000_000});
  for(const row of f.selectedStories.slice(1)){
   const unavailable={id:row.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};
@@ -235,12 +235,15 @@ test('durable alarms continue healthy chunks promptly and back off blocked batch
 });
 test('real workerd alarms finish bounded chunks through the private namespace',async()=>{
  const file=path.join(dir,'alarm-worker.mjs');await build({entryPoints:['worker/production.ts'],outfile:file,bundle:true,format:'esm',platform:'browser'});
- const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'false'}}));
+ const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`export default {async fetch(request){
+ const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);
+ return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
+ }};`}]}));
  try{
   const ns=await mf.getDurableObjectNamespace('NEWSROOM'),stub=ns.get(ns.idFromName('production-v1'));
   const call=async(op,args={})=>{const r=await stub.fetch('https://internal/'+op,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});const b=await r.json();if(!r.ok)throw Error(b.error);return b;};
   const f=snapshot(await call('root'));await call('snapshot',{snapshot:f});
-  for(const row of f.selectedStories){const source={id:row.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};source.fingerprint=await api.digest(source);await call('source',{generatedAt:f.generatedAt,source});}
+  for(const row of f.selectedStories){const source={id:row.id,generatedAt:f.generatedAt,kind:'article',excerpt:'A fictional system demonstrates a synthetic operation.',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'fetched'};source.fingerprint=await api.digest(source);await call('source',{generatedAt:f.generatedAt,source});}
   const lease=await call('run-claim');await call('run-release',{_runToken:lease.token,continuationDelayMs:1000});
   const deadline=Date.now()+20_000;let status;
   do{await new Promise(resolve=>setTimeout(resolve,250));status=await call('status');}while(status.pending&&Date.now()<deadline);
@@ -307,4 +310,13 @@ test('production collection hydrates the complete pool in private batches below 
   assert.equal((await s.request('collect-items',{ids:[ids[0]],at:Date.now()})).status,409);
   assert.equal(external,before);
  }finally{globalThis.fetch=original;}
+});
+
+test('private failure status retains bounded diagnostics and strips arbitrary provider fields',async()=>{
+ const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ await s.call('failure',{generatedAt:f.generatedAt,storyId:f.selectedStories[0].id,kind:'transient',details:{phase:'http',httpStatus:429,code:'insufficient_quota',message:'synthetic-secret',body:'synthetic-source'}});
+ const status=await s.call('status',{generatedAt:f.generatedAt});
+ assert.deepEqual(status.failure.details,{phase:'http',httpStatus:429,code:'insufficient_quota'});
+ assert.ok(!JSON.stringify(status).includes('synthetic-secret'));
+ assert.ok(!JSON.stringify(status).includes('synthetic-source'));
 });

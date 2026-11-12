@@ -14,6 +14,16 @@ const ENDPOINT = 'https://api.openai.com/v1/responses';
 export type ModelUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 export type EditorialModelConfig = { apiKey: string; model: string; maxOutputTokens: number };
 export type EditorialModelResult = { story: Story; usage: ModelUsage; requested: boolean };
+export type ModelFailureDetails = { phase: 'transport' | 'timeout' | 'http' | 'payload' | 'usage' | 'output'; httpStatus?: number; code?: string };
+const diagnosticCodes = new Set(['invalid_api_key','invalid_service_tier','model_not_found','insufficient_quota','rate_limit_exceeded','slow_down','organization_spend_limit_exceeded','project_spend_limit_exceeded','organization_usage_limit_exceeded','server_error','server_is_overloaded','max_output_tokens','invalid_request_error','unsupported_parameter']);
+export function parseModelFailureDetails(value: unknown): ModelFailureDetails | null {
+  if (!value || typeof value !== 'object') return null;
+  const v=value as Record<string,unknown>;
+  if (!['transport','timeout','http','payload','usage','output'].includes(String(v.phase))) return null;
+  return {phase:v.phase as ModelFailureDetails['phase'],
+    ...(typeof v.httpStatus==='number' && Number.isInteger(v.httpStatus) && v.httpStatus>=100 && v.httpStatus<=599 ? {httpStatus:v.httpStatus}:{}),
+    ...(typeof v.code==='string' && diagnosticCodes.has(v.code) ? {code:v.code}:{})};
+}
 export type EditorialModelFailure = 'safety_stop' | 'transient' | 'validation';
 
 /**
@@ -23,11 +33,13 @@ export type EditorialModelFailure = 'safety_stop' | 'transient' | 'validation';
  */
 export class EditorialModelError extends Error {
   readonly kind: EditorialModelFailure;
+  readonly details: ModelFailureDetails | null;
   readonly usage: ModelUsage | null;
   readonly accountingUncertain: boolean;
   readonly requested: boolean;
 
   constructor(kind: EditorialModelFailure, message: string, options: {
+    details?: ModelFailureDetails;
     usage?: ModelUsage | null;
     accountingUncertain?: boolean;
     requested?: boolean;
@@ -35,6 +47,7 @@ export class EditorialModelError extends Error {
     super(message);
     this.name = 'EditorialModelError';
     this.kind = kind;
+    this.details = parseModelFailureDetails(options.details);
     this.usage = options.usage ?? null;
     this.requested = options.requested ?? false;
     this.accountingUncertain = options.accountingUncertain ?? (this.requested && !this.usage);
@@ -132,12 +145,12 @@ function transientResponse(status: number, body?: JsonObject): boolean {
   return [408, 409, 425, 429].includes(status) || status >= 500 ||
     ['server_error', 'rate_limit_exceeded', 'temporarily_unavailable'].includes(String(code));
 }
-function failAfterRequest(kind: EditorialModelFailure, message: string, usage: ModelUsage | null): never {
-  throw new EditorialModelError(kind, message, { usage, requested: true });
+function failAfterRequest(kind: EditorialModelFailure, message: string, usage: ModelUsage | null, details: ModelFailureDetails = {phase:"output"}): never {
+  throw new EditorialModelError(kind, message, { usage, requested: true, details });
 }
 function outputText(body: JsonObject, usage: ModelUsage): string {
   if (body.status !== 'completed' || body.error != null || !Array.isArray(body.output)) {
-    return failAfterRequest(transientResponse(200, body) ? 'transient' : 'validation', 'Editorial response did not complete', usage);
+    return failAfterRequest(transientResponse(200, body) ? 'transient' : 'validation', 'Editorial response did not complete', usage, {phase:'output',...(object(body.incomplete_details)&&typeof body.incomplete_details.reason==='string'?{code:body.incomplete_details.reason}:{})});
   }
   const texts: string[] = [];
   for (const item of body.output) {
@@ -250,30 +263,33 @@ export async function generateEditorialCopy(
   let text: string;
   try {
     response = await Promise.race([fetcher(ENDPOINT, {
-      method: 'POST', redirect: 'error', credentials: 'omit', signal: controller.signal,
+      method: 'POST', redirect: 'manual', credentials: 'omit', signal: controller.signal,
       headers: { Authorization: 'Bearer ' + config.apiKey, 'Content-Type': 'application/json' },
       body: encoded,
     }), expired]);
     text = await Promise.race([boundedBody(response, MAX_RESPONSE_BYTES, MODEL_REQUEST_TIMEOUT_MS), expired]);
   } catch (error) {
+    const timedOut=controller.signal.aborted;
     controller.abort();
     return failAfterRequest(error instanceof RequestError && error.status === 413 ? 'validation' : 'transient',
-      'Editorial request failed; accounting is uncertain', null);
+      'Editorial request failed; accounting is uncertain', null, {phase:timedOut?'timeout':'transport'});
   } finally {
     clearTimeout(timer);
   }
+  // Workers supports only manual/follow. Never forward the API credential to a redirect.
+  if(response.status>=300 && response.status<400) return failAfterRequest('validation', 'Editorial endpoint redirect rejected', null, {phase:'http',httpStatus:response.status});
   let body: unknown;
   try { body = JSON.parse(text); } catch {
-    return failAfterRequest(transientResponse(response.status) ? 'transient' : 'validation', 'Invalid editorial response; accounting is uncertain', null);
+    return failAfterRequest(transientResponse(response.status) ? 'transient' : 'validation', 'Invalid editorial response; accounting is uncertain', null, {phase:'payload',httpStatus:response.status});
   }
-  if (!object(body)) return failAfterRequest(transientResponse(response.status) ? 'transient' : 'validation', 'Invalid editorial response; accounting is uncertain', null);
+  if (!object(body)) return failAfterRequest(transientResponse(response.status) ? 'transient' : 'validation', 'Invalid editorial response; accounting is uncertain', null, {phase:'payload',httpStatus:response.status});
   const usage = checkedUsage(body.usage, config.maxOutputTokens);
   // This check precedes accounting and HTTP validation so refusal is NEVER
   // downgraded to a retryable or source-unavailable condition.
   if (providerSafetyStop(body)) return failAfterRequest('safety_stop', 'Editorial provider safety stop; retain the current publication', usage);
-  if (!response.ok) return failAfterRequest(transientResponse(response.status, body) ? 'transient' : 'validation', 'Editorial provider rejected the request', usage);
+  if (!response.ok) return failAfterRequest(transientResponse(response.status, body) ? 'transient' : 'validation', 'Editorial provider rejected the request', usage, {phase:'http',httpStatus:response.status,...(object(body.error)&&typeof body.error.code==='string'?{code:body.error.code}:{})});
   if (!usage || (body.status === 'completed' && usage.outputTokens === 0)) {
-    return failAfterRequest('validation', 'Missing or invalid model usage; accounting is uncertain', null);
+    return failAfterRequest('validation', 'Missing or invalid model usage; accounting is uncertain', null, {phase:'usage',httpStatus:response.status});
   }
   let copy: unknown;
   try { copy = JSON.parse(outputText(body, usage)); } catch (error) {
