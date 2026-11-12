@@ -13,7 +13,7 @@ alarms continue a selected edition between ticks. This is a refresh attempt
 cadence, not a guarantee that an incomplete or blocked edition will publish.
 
 The account, Worker, `Newsroom` binding, `production-v1` singleton and migration
-history are unchanged. Existing restrictions, complete-selection validation,
+history are unchanged. Complete-selection validation,
 durable holds, lead history, model reservations and atomic publication remain in
 force. API spending remains capped internally at USD 1/day and USD 5/month;
 Cloudflare charges are separate. The existing remote `OPENAI_API_KEY` is preserved.
@@ -41,11 +41,12 @@ not accidentally alter the reader's domain binding.
 
 ## Cutover gate
 
-On November 12, 2026 UTC, the fresh metadata-only selection failed the existing
-restricted-batch check. No publisher text or model request was made by that
-preflight. Do not drop stories, change IDs, import an old edition, or reset state
-to bypass it. A schedule can be installed, but DNS must remain on the working
-site until the independent backend produces a complete permitted edition.
+On November 12, 2026 UTC, an initial metadata-only selection failed the old
+hardcoded story-ID blocklist. The owner subsequently requested removal of that
+list. The blocklist and its enforcement calls have been removed; model refusals,
+durable safety holds and complete-edition validation remain in force. No stored
+authority or history is reset. DNS remains on the working site until the
+independent backend produces and verifies a complete edition.
 
 Before moving the domain, verify a successful scheduled publication; matching
 HTML/API versions and complete story counts; archives, reader assets and

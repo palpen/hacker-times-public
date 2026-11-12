@@ -1,5 +1,6 @@
 > November 12 update: see [Cloudflare schedule and cutover status](CLOUDFLARE_SCHEDULE.md).
-> The following records the earlier preparation and preserves its safety boundaries.
+> The following is historical preparation. The owner later requested removal of
+> the hardcoded story-ID blocklist; current behavior is documented in PRODUCTION_BACKEND.md.
 
 # Independent Cloudflare migration: preparation only
 

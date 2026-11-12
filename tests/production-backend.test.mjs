@@ -53,10 +53,20 @@ test('synthetic complete staging, validation, atomic commit, archive and stale b
  assert.match(persisted.html,/Manufacturing|Hacker Times/);assert.match(persisted.html,new RegExp(published.version));
  await assert.rejects(()=>s.call('validate',{generatedAt:fixture.generatedAt}),/base changed/);
 });
-test('full restricted selection blocks before source work, including non-lead',async()=>{
- const s=await setup(),root=await s.call('root'),at=Date.now()-100_000,items=pool(at);items[15].id=50414234;
- assert.throws(()=>snapshot(root,at,items),/restricted batch/);
- assert.equal((await s.call('root')).version,'empty');
+test('formerly blocked story IDs can complete the normal publication workflow',async()=>{
+ const s=await setup(),root=await s.call('root'),at=Date.now()-100_000,items=pool(at);
+ // Regression IDs only: all titles, URLs and authored content remain fictional.
+ const ids=[50414427,50414234,50414155,50414215,50366902,50373004,50347552];
+ ids.forEach((id,i)=>{items[i].id=id;items[i].url='https://fictional.example/article/'+id;});
+ const fixture=snapshot(root,at,items);
+ for(const id of ids)assert.ok(fixture.selectedStories.some(story=>story.id===id));
+ await s.call('snapshot',{snapshot:fixture});
+ for(const selected of fixture.selectedStories)await s.call('stage',await author(s,fixture,selected));
+ assert.equal((await s.call('validate',{generatedAt:fixture.generatedAt})).valid,true);
+ const published=await s.call('publish',{generatedAt:fixture.generatedAt});
+ const persisted=await s.call('edition');
+ assert.equal(persisted.version,published.version);
+ for(const id of ids)assert.ok(persisted.edition.stories.some(story=>story.id===id));
 });
 test('source, provenance, pinned metrics, images and replacement conflicts fail closed',async()=>{
  const s=await setup(),fixture=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:fixture});

@@ -39,7 +39,7 @@ for a temporary workers.dev address. No model key is needed for the initial defa
    expected empty reader state. Record exact URL, deployment version, account,
    namespace, class, singleton object name `production-v1`, and commit.
 5. Do not change namespace IDs, class/migration history or singleton name to clear
-   a failure. Do not import the old managed edition or its restricted content.
+   a failure. This backend starts from a fresh edition rather than importing the old managed edition.
 
 ## Secure application credentials
 
@@ -78,10 +78,10 @@ on billing, top-ups, payment methods or spending from this runbook alone.
    remote PITR and undo; this cannot be validated with local Miniflare.
 4. Only after explicit spending authorization, a tiny fictional Responses request
    with the selected model and structured schema. Verify refusal/usage/error behavior,
-   usage accounting and project limits. Do not use restricted stories as a probe.
-5. Authorized metadata-only HN collection; inspect the entire pinned selection against
-   the permanent restricted-ID boundary before any article sourcing or summary work.
-   Any overlap stops the whole batch. Do not filter required stories or substitute.
+   usage accounting and project limits. Use fictional content for this probe.
+5. Authorized metadata-only HN collection; pin and validate the complete selection
+   before article sourcing or summary work. No hardcoded story-ID blocklist remains.
+   Do not drop required stories to publish an incomplete edition.
 6. Source/provenance, complete stage/validate, rendered publication/version, archive
    and comments checks. No automatic publication before its explicit launch gate.
 7. Enable one approved cron only after verification; durable alarms continue bounded

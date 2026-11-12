@@ -1,19 +1,15 @@
 import {candidates,article} from '../reporting';
 import {boundedBody,RequestError} from '../security';
 import {chooseLead,pinSnapshot} from './selection';
-import {assertPermittedSelection} from './safety';
 import {digest} from './storage';
 import type {Root,Snapshot,Source} from './types';
 export async function collectSnapshot(root:Root):Promise<Snapshot>{
  if(root.safetyStop)throw new RequestError('Explicit safety stop is active',409);
- // Metadata-only is essential: inspect the COMPLETE selection before any source
- // retrieval/editorial processing. Restricted IDs are never filtered out.
+ // Pin the complete metadata selection before source retrieval/editorial work.
  const result=await candidates(root.ledger.active?.id,'month',async(pool,ids,at)=>chooseLead(root,pool,ids,at).audit.leadId!,true);
- assertPermittedSelection(result.selectedStories);
  return pinSnapshot(root,result);
 }
 export async function collectSource(s:Snapshot,id:number):Promise<Source>{
- assertPermittedSelection(s.selectedStories);
  const selected=s.selectedStories.find(x=>x.id===id);if(!selected)throw new RequestError('Article not selected');
  const url=new URL(selected.url);let source:Omit<Source,'fingerprint'>;
  if(url.origin==='https://news.ycombinator.com'&&url.pathname==='/item'&&url.searchParams.get('id')===String(id)){

@@ -20,10 +20,10 @@ and its ledger update occur in one storage transaction. No old state is imported
 Missing initialized authority fails closed; there is no reset endpoint.
 
 Balanced lead scoring and complete month/section selection reuse existing pure
-policy functions. Candidate collection is **metadata-only** until the full selection
-passes the immutable restricted-ID guard. A restricted story is not removed or
-replaced to make a batch pass. The existing platform interruption boundary is kept
-as identifiers only. It is not cleared by this migration or fresh lead ledger.
+policy functions. Candidate collection pins the complete metadata selection before
+source retrieval and editorial work. There is no hardcoded story-ID blocklist;
+the owner requested its removal on November 12, 2026 UTC. Every selected story
+still requires source evidence, staging and complete-edition validation.
 Explicit new `safety_stop` records durably stop all editorial processing and
 publication; no API clears them or downgrades them to source unavailability.
 
@@ -192,7 +192,7 @@ npx wrangler deploy --dry-run --config wrangler.production.jsonc
 
 Synthetic tests forbid network requests. They cover complete staging/validation,
 transactional commit/readback, archive/version access, concurrent stage conflicts,
-source provenance, image rejection, durable safety holds, restricted selection,
+source provenance, image rejection, durable safety holds, unrestricted story IDs,
 incumbent preservation, retirement/repost suppression, stale bases, default-off
 scheduling, authentication, and missing authority. The existing stale-date policy
 fixture now freezes its own clock instead of expiring 48 hours after its test date.

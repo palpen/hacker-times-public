@@ -3,7 +3,6 @@ import {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion} from '../policy
 import {normalizeArticleUrl} from '../lead-retirement';
 import type {Candidate,SourceSnapshot} from '../contracts';
 import {RequestError} from '../security';
-import {assertPermittedSelection} from './safety';
 import type {Root,Ledger,Snapshot} from './types';
 export function chooseLead(root:Root,pool:Candidate[],frontPageIds:number[],at:number) {
   const ledger=root.ledger, active=ledger.active;
@@ -23,7 +22,6 @@ export function chooseLead(root:Root,pool:Candidate[],frontPageIds:number[],at:n
   return {audit,nextLedger};
 }
 export function pinSnapshot(root:Root,fetched:SourceSnapshot):Snapshot {
-  assertPermittedSelection(fetched.selectedStories);
   const at=Date.parse(fetched.generatedAt);
   if(!Number.isFinite(at)||new Date(at).toISOString()!==fetched.generatedAt||at>Date.now()+300_000||at<Date.now()-48*3600_000||(root.generatedAt&&at<=Date.parse(root.generatedAt)))throw new RequestError('Invalid or non-advancing source timestamp',409);
   const {audit,nextLedger}=chooseLead(root,fetched.rankedStories,fetched.frontPageIds,Date.parse(fetched.generatedAt));

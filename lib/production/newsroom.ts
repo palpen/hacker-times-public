@@ -4,7 +4,6 @@ import {validateEdition} from '../news';
 import {renderEdition} from '../render-edition';
 import {RequestError,jsonBody} from '../security';
 import {pinSnapshot} from './selection';
-import {assertPermittedSelection} from './safety';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
@@ -23,7 +22,7 @@ async function rootAt(store:Store):Promise<Root>{
 }
 async function snapshotAt(store:Store,at:string,root:Root){
  const s=await readBlob<Snapshot>(store,snapshotKey(at));if(!s)throw new RequestError('Saved selection not found',404);
- assertPermittedSelection(s.selectedStories);hold(root);
+ hold(root);
  if(root.version!==s.basePublicationVersion||root.revision!==s.baseRevision)throw new RequestError('Pinned publication base changed; collect a new snapshot',409);
  if(await store.get('pending')!==at)throw new RequestError('Snapshot is no longer the pending batch',409);
  return s;
