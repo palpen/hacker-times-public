@@ -1,3 +1,6 @@
+> November 12 update: see [Cloudflare schedule and cutover status](CLOUDFLARE_SCHEDULE.md).
+> The following records the earlier preparation and preserves its safety boundaries.
+
 # Independent Cloudflare migration: preparation only
 
 Canonical production source target: `palpen/hacker-times-public`, starting at
