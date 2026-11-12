@@ -1,6 +1,7 @@
 import {categories} from './contracts';
 import {classifyTopicV4,monthPolicyConfig,freshSectionScore,unifiedSectionPolicyConfig} from './policy';
-import {boundedBody,RequestError} from './security';
+import {boundedBody} from './security';
+import {CollectionError,collectionFailure} from './collection-error';
 
 // Discovery is a bounded index sample, not an exhaustive archive. Only official
 // Firebase item responses may supply the published scores and story metadata.
@@ -18,7 +19,7 @@ const queryPlan=[
 ] as const;
 export type HistoryHit={id:number;title:string;url?:string;score:number;comments:number;time:number};
 type HistoryWindow=ReturnType<typeof monthWindow>;
-function fail(message:string):never {throw new RequestError('Historical HN discovery '+message+'; keep the previous edition.',502);}
+function fail(message:string):never {throw new CollectionError('Historical HN discovery '+message+'; keep the previous edition.',{phase:'history',reason:'payload',upstreamStatus:null});}
 function object(value:unknown):value is Record<string,unknown>{return !!value&&typeof value==='object'&&!Array.isArray(value);}
 function nonnegative(value:unknown):value is number{return Number.isSafeInteger(value)&&Number(value)>=0;}
 
@@ -83,10 +84,10 @@ export async function discoverHistory(atMs:number,currentIds:readonly number[]){
   let response:Response|undefined;
   try{
    response=await fetch(plan.url,{redirect:'manual',headers:{accept:'application/json'},signal:AbortSignal.timeout(historyLimits.requestTimeoutMs)});
-   if(response.status!==200||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))fail('is unavailable');
+   if(response.status!==200||!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type')||''))throw new CollectionError('Historical HN discovery is unavailable; keep the previous edition.',{phase:'history',reason:response.status!==200?'http':'content_type',upstreamStatus:response.status});
    const body=await boundedBody(response,historyLimits.maxResponseBytes,historyLimits.requestTimeoutMs);
    return parseHistoryResponse(JSON.parse(body),window);
-  }catch(error){if(error instanceof RequestError&&error.status===502)throw error;fail('failed or exceeded a response limit');}
+  }catch(error){throw collectionFailure(error,'history','Historical HN discovery failed or exceeded a response limit; keep the previous edition.');}
   finally{void response?.body?.cancel().catch(()=>{});}
  }));
  const hits=responses.flat(),discoveredCount=new Set(hits.map(s=>s.id)).size;

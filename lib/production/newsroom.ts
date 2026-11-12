@@ -3,6 +3,8 @@ import {editionLimits} from '../contracts';
 import {validateEdition} from '../news';
 import {renderEdition} from '../render-edition';
 import {RequestError,jsonBody} from '../security';
+import {fetchOfficialItems} from '../reporting';
+import {CollectionError,parseCollectionDetails} from '../collection-error';
 import {pinSnapshot} from './selection';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
 import {runEdition} from './runner';
@@ -94,7 +96,14 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/run-progress'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/run-progress'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+    }
+    if(path==='/collect-items'){
+     hold(root);
+     if(this.env?.LIVE_FETCH_ENABLED!=='true')throw new RequestError('Live collection is disabled',503);
+     const ids=args.ids,at=args.at;
+     if(!Array.isArray(ids)||!ids.length||ids.length>32||ids.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(ids).size!==ids.length||typeof at!=='number'||!Number.isSafeInteger(at)||at>Date.now()+300_000||at<Date.now()-48*3600_000)throw new RequestError('Invalid bounded collection batch');
+     return {ids:ids as number[],at};
     }
     if(path==='/root')return root;
     if(path==='/edition'){
@@ -203,7 +212,13 @@ export class Newsroom {
     }
     throw new RequestError('Unknown operation',404);
    });
+   // External requests run after the transaction: storage retries must never
+   // replay network calls, and slow sources must not hold a storage transaction.
+   if(path==='/collect-items'){
+    const batch=result as {ids:number[];at:number};
+    return Response.json(await fetchOfficialItems(batch.ids,batch.at),{headers:{'Cache-Control':'no-store'}});
+   }
    return Response.json(result,{headers:{'Cache-Control':'no-store'}});
-  }catch(error){return Response.json({error:error instanceof RequestError?error.message:'Backend operation failed; preserve edition and inspect logs'},{status:error instanceof RequestError?error.status:503,headers:{'Cache-Control':'no-store'}});}
+  }catch(error){return Response.json({error:error instanceof RequestError?error.message:'Backend operation failed; preserve edition and inspect logs',...(error instanceof CollectionError?{collection:parseCollectionDetails(error.details)}:{})},{status:error instanceof RequestError?error.status:503,headers:{'Cache-Control':'no-store'}});}
  }
 }

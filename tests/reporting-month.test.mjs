@@ -19,6 +19,18 @@ let mode='normal',calls=[],officialActive=0,maxOfficial=0,articleActive=0,maxArt
 const tick=()=>new Promise(resolve=>setTimeout(resolve,1));
 globalThis.fetch=async (input,options)=>{
  const url=String(input);calls.push(url);
+ if(url==='https://hacker-news.firebaseio.com/v0/topstories.json'){
+  assert.equal(options.redirect,'manual');
+  if(mode==='api-http')return Response.json({},{status:503});
+  if(mode==='api-request-limit')throw new Error('Too many subrequests.');
+  if(mode==='api-content')return new Response(JSON.stringify(current),{headers:{'content-type':'text/html'}});
+  if(mode==='api-duplicate')return Response.json([...current.slice(0,89),1]);
+  if(mode==='api-short')return Response.json(current.slice(0,89));
+  if(mode==='api-invalid')return Response.json([...current.slice(0,89),'90']);
+  if(mode==='api-huge')return Response.json(Array.from({length:501},(_,i)=>i+1));
+  return Response.json([...current].reverse());
+ }
+
  if(/^https:\/\/news.ycombinator.com\/(\?p=[23])?$/.test(url))return new Response(html(Number(new URL(url).searchParams.get('p')||1)),{headers:{'content-type':'text/html'}});
  if(url.startsWith('https://hn.algolia.com/')){
   if(mode==='discovery-fail'&&new URL(url).searchParams.get('query')==='chess')return Response.json({},{status:503});
@@ -100,6 +112,26 @@ try{
  const commentResponse=await service(new Request('https://fixture.example/api/comments?storyId='+only.id+'&version='+published.version),env);
  assert.equal(commentResponse.status,200);assert.equal((await commentResponse.json()).storyId,only.id);
  await assert.rejects(()=>editorCall('publish_edition',{edition:{...payload,stories:payload.stories.filter(s=>s.id!==only.id)}},request,env));
+
+ // Independent production uses the supported API even when HTML is inaccessible.
+ mode='normal';calls=[];
+ const api=await candidates(undefined,'month',undefined,true,'official-api');
+ assert.deepEqual(api.frontPageIds,[...current].reverse().slice(0,30));
+ assert.deepEqual(api.sourcePages.flatMap(p=>p.ids),[...current].reverse());
+ assert.ok(api.sourcePages.every(p=>p.url==='https://hacker-news.firebaseio.com/v0/topstories.json'));
+ assert.equal(api.discovery.currentSource,'hn-topstories-api');assert.equal(api.discovery.currentRankCount,90);
+ assert.equal(api.rankedStories.find(s=>s.id===90).hnRank,1);assert.equal(api.rankedStories.find(s=>s.id===1).hnPage,3);
+ assert.match(api.ranking,/API ranks 1–30/);assert.equal(api.stories.length,0);
+ assert.ok(!calls.some(u=>u.startsWith('https://news.ycombinator.com/')||u.startsWith('https://example.org/')));
+ for(const failure of ['api-http','api-content','api-duplicate','api-short','api-invalid','api-huge']){
+  mode=failure;calls=[];await assert.rejects(()=>candidates(undefined,'month',undefined,true,'official-api'),/keep the previous edition/);
+  assert.equal(calls.length,1,'invalid list must stop before hydration or HTML fallback');
+ }
+ mode='api-request-limit';
+ await assert.rejects(()=>candidates(undefined,'month',undefined,true,'official-api'),error=>error.status===502&&error.details.phase==='current_list'&&error.details.reason==='request_limit');
+ mode='api-http';
+ await assert.rejects(()=>candidates(undefined,'month',undefined,true,'official-api'),error=>error.details.upstreamStatus===503&&error.details.reason==='http');
+ mode='normal';
  // Default strategy stays legacy and does not contact the historical index.
  calls=[];const legacy=await candidates(1);assert.equal(legacy.algorithmVersion,2);assert.equal(legacy.selectionVersion,1);assert.equal(legacy.layoutVersion,1);assert.equal(legacy.sourceMode,'hn-multi-page');assert.equal(legacy.fetchedCount,90);assert.equal(legacy.stories.length,34);assert.ok(!('windowStart' in legacy));assert.ok(!('discovery' in legacy));assert.ok(!calls.some(u=>u.startsWith('https://hn.algolia.com/')));
  mode='deleted';const dropped=await candidates(1,'month');assert.ok(!dropped.rankedStories.some(s=>[101,102,103].includes(s.id)));assert.equal(dropped.fetchedCount-dropped.candidateCount,3);

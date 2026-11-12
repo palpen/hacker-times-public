@@ -1,4 +1,5 @@
 import {RequestError} from '../security';
+import {CollectionError,parseCollectionDetails} from '../collection-error';
 
 type Trigger='cron'|'alarm';
 const record=(value:unknown):Record<string,unknown>=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};
@@ -19,7 +20,7 @@ export async function observeRun(trigger:Trigger,operation:()=>Promise<unknown>,
  let result:unknown;
  try{result=await operation();}
  catch(error){
-  write(JSON.stringify(runLogEvent(trigger,null,error instanceof RequestError?error.status:500)));
+  write(JSON.stringify({...runLogEvent(trigger,null,error instanceof RequestError?error.status:500),...(error instanceof CollectionError?{collection:parseCollectionDetails(error.details)}:{})}));
   // Cloudflare also logs uncaught errors. Do not let an upstream exception's
   // message/cause/stack include source text, credentials or provider payloads.
   throw new Error('Hacker Times background run failed; inspect private stored state.');

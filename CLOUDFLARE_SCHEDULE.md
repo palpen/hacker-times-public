@@ -48,6 +48,12 @@ durable safety holds and complete-edition validation remain in force. No stored
 authority or history is reset. DNS remains on the working site until the
 independent backend produces and verifies a complete edition.
 
+The 03:30 UTC run subsequently failed during collection. Remote diagnostics
+identified two causes: the HN homepage returned HTTP 419 from Cloudflare, and
+the original all-at-once collector exceeded 50 external subrequests. The collector
+now uses the official topstories API and private 32-item hydration batches.
+See PRODUCTION_BACKEND.md for the explicit API-rank provenance and diagnostic fields.
+
 Before moving the domain, verify a successful scheduled publication; matching
 HTML/API versions and complete story counts; archives, reader assets and
 comments; and operational recovery for the existing namespace. Images and old

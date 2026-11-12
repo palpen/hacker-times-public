@@ -1,4 +1,6 @@
 import {RequestError} from '../security';
+import {CollectionError,parseCollectionDetails} from '../collection-error';
+import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
 import {generateEditorialCopy,EditorialModelError,MAX_RESERVED_INPUT_TOKENS} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
@@ -6,13 +8,19 @@ import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
 type RunEnv=ProductionEnv & {_runToken?:string};
 export async function call(env:RunEnv,path:string,args:Record<string,unknown>={}){
  const response=await env.NEWSROOM.get(env.NEWSROOM.idFromName('production-v1')).fetch(new Request('https://newsroom.internal/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,...(env._runToken?{_runToken:env._runToken}:{})})}));
- if(!response.ok){const failure=await response.json() as {error:string};throw new RequestError(failure.error,response.status);}
+ if(!response.ok){const failure=await response.json() as {error:string;collection?:unknown};const details=parseCollectionDetails(failure.collection);if(details)throw new CollectionError(failure.error,details);throw new RequestError(failure.error,response.status);}
  return response.json();
 }
 export function enabled(value:string|undefined,name:string){if(value!=='true')throw new RequestError(name+' is disabled pending launch authorization',503);}
 export async function collect(env:ProductionEnv){
  enabled(env.MUTATIONS_ENABLED,'Mutations');enabled(env.LIVE_FETCH_ENABLED,'Live collection');
- const root=await call(env,'root') as Root;const snapshot=await collectSnapshot(root);
+ const root=await call(env,'root') as Root;const snapshot=await collectSnapshot(root,async(ids,at)=>{
+  const items:(OfficialItem|null)[]=[];
+  // Each private DO invocation makes at most 32 external requests. The parent
+  // only performs discovery plus eight internal calls, below the Free limit.
+  for(let i=0;i<ids.length;i+=32)items.push(...await call(env,'collect-items',{ids:ids.slice(i,i+32),at}) as (OfficialItem|null)[]);
+  return items;
+ });
  await call(env,'snapshot',{snapshot});return snapshot;
 }
 export async function sourceFor(env:ProductionEnv,generatedAt:unknown,id:unknown){

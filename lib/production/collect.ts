@@ -1,12 +1,12 @@
-import {candidates,article} from '../reporting';
+import {candidates,article,type OfficialItemHydrator} from '../reporting';
 import {boundedBody,RequestError} from '../security';
 import {chooseLead,pinSnapshot} from './selection';
 import {digest} from './storage';
 import type {Root,Snapshot,Source} from './types';
-export async function collectSnapshot(root:Root):Promise<Snapshot>{
+export async function collectSnapshot(root:Root,hydrate?:OfficialItemHydrator):Promise<Snapshot>{
  if(root.safetyStop)throw new RequestError('Explicit safety stop is active',409);
  // Pin the complete metadata selection before source retrieval/editorial work.
- const result=await candidates(root.ledger.active?.id,'month',async(pool,ids,at)=>chooseLead(root,pool,ids,at).audit.leadId!,true);
+ const result=await candidates(root.ledger.active?.id,'month',async(pool,ids,at)=>chooseLead(root,pool,ids,at).audit.leadId!,true,'official-api',hydrate);
  return pinSnapshot(root,result);
 }
 export async function collectSource(s:Snapshot,id:number):Promise<Source>{

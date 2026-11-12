@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';import {build} from 'esbuild';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-production-'));
 const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
-fs.writeFileSync(entry,`export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {runEdition} from '${process.cwd()}/lib/production/runner';`);
+fs.writeFileSync(entry,`export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
 const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true});
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>x.endsWith('lib/production/auth.ts')),'removed auth module must not enter production bundle');
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>/data\/|lib\/(publication|editor|editorial-staging|lead-state)\.ts/.test(x)),'independent backend must not bundle old data/managed writer');
@@ -271,6 +271,40 @@ test('background logs allow only fixed outcomes and bounded metadata, never secr
  assert.equal(lines.length,1);assert.ok(!lines[0].includes(secret));const event=JSON.parse(lines[0]);assert.equal(event.outcome,'blocked');assert.equal(event.blocked,1);assert.equal(event.remaining,1);assert.equal(event.generatedAt,null);assert.equal(event.publicationVersion,null);
  await assert.rejects(()=>api.observeRun('alarm',async()=>{throw Error(secret);},line=>lines.push(line)),error=>error.message==='Hacker Times background run failed; inspect private stored state.'&&!error.cause);
  assert.ok(!lines.join('').includes(secret));assert.equal(JSON.parse(lines[1]).httpStatus,500);
+ await assert.rejects(()=>api.observeRun('cron',async()=>{throw new api.CollectionError(secret,{phase:'items',reason:'http',upstreamStatus:429});},line=>lines.push(line)));
+ assert.deepEqual(JSON.parse(lines[2]).collection,{phase:'items',reason:'http',upstreamStatus:429});assert.ok(!lines.join('').includes(secret));
  const success=api.runLogEvent('alarm',{publication:{published:true,version:'e-'+'a'.repeat(24)},generatedAt:'2026-11-11T00:00:00.000Z'});assert.equal(success.outcome,'published');assert.equal(success.publicationVersion,'e-'+'a'.repeat(24));
  assert.equal(api.runLogEvent('cron',{checkpoint:'deduplicated'}).outcome,'skipped');
+});
+
+test('production collection hydrates the complete pool in private batches below the request limit',async()=>{
+ const original=globalThis.fetch,env={LIVE_FETCH_ENABLED:'true',MUTATIONS_ENABLED:'true'},s=await setup(env);
+ const ids=Array.from({length:90},(_,i)=>7000+i),batches=[];let external=0,inTransaction=false;
+ const transaction=s.storage.transaction.bind(s.storage);
+ s.storage.transaction=fn=>transaction(async tx=>{inTransaction=true;try{return await fn(tx);}finally{inTransaction=false;}});
+ env.NEWSROOM={idFromName:x=>x,get:()=>({fetch:async request=>{
+  const op=new URL(request.url).pathname.slice(1),args=await request.json();
+  if(op==='collect-items')batches.push(args.ids.length);
+  return s.request(op,args);
+ }})};
+ globalThis.fetch=async input=>{
+  assert.equal(inTransaction,false,'source reads must run outside storage transactions');external++;
+  const u=String(input);
+  if(u.endsWith('/topstories.json'))return Response.json(ids);
+  if(u.startsWith('https://hn.algolia.com/'))return Response.json({hits:[],hitsPerPage:100,nbHits:0,nbPages:0,page:0});
+  const match=u.match(/\/item\/(\d+)\.json$/);assert.ok(match,'no HTML scraping or model call');
+  const id=Number(match[1]);return Response.json({id,type:'story',title:'Fictional compiler '+id,url:'https://fictional.example/'+id,score:200,descendants:20,time:Math.floor(Date.now()/1000)-3600});
+ };
+ try{
+  const snapshot=await api.collectMetadata(env);
+  assert.deepEqual(batches,[32,32,26]);assert.equal(external,104);
+  assert.equal(snapshot.rankedStories.length,90);assert.equal(snapshot.discovery.currentSource,'hn-topstories-api');
+  assert.equal((await s.call('status')).pending,snapshot.generatedAt);
+  const before=external;
+  assert.equal((await s.request('collect-items',{ids:ids.slice(0,33),at:Date.now()})).status,400);
+  assert.equal(external,before);
+  await s.call('failure',{generatedAt:snapshot.generatedAt,kind:'safety_stop'});
+  assert.equal((await s.request('collect-items',{ids:[ids[0]],at:Date.now()})).status,409);
+  assert.equal(external,before);
+ }finally{globalThis.fetch=original;}
 });

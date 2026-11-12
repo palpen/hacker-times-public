@@ -27,6 +27,29 @@ still requires source evidence, staging and complete-edition validation.
 Explicit new `safety_stop` records durably stop all editorial processing and
 publication; no API clears them or downgrades them to source unavailability.
 
+### Cloudflare collection compatibility
+
+The independent collector reads the first 90 ordered IDs from the official
+`https://hacker-news.firebaseio.com/v0/topstories.json` endpoint. It does not scrape
+the HN homepage: a Cloudflare remote reproduction returned HTTP 419 (`Sorry`) for
+that request. For the existing ranking contract, the first 30 API entries are the
+lead/top pool and `hnPage` denotes a group of 30 API ranks. Snapshot discovery
+metadata and ranking text explicitly identify this source; the three `sourcePages`
+entries are rank groups from the same API URL, not three fetched HTML pages.
+The managed editor's existing HTML collection remains its default.
+
+Monthly Algolia discovery still uses its bounded 13-query sample. Required official
+item metadata is fetched in batches of at most 32 through the existing private
+Newsroom binding. Each batch has a separate invocation, staying below the observed
+50-external-request limit without dropping candidate stories or upgrading billing.
+Calls remain fenced by the runner lease and durable hold, and external fetches run
+outside the storage transaction. No public administration endpoint is added.
+The complete selection is pinned only after all batches succeed.
+
+Collection failures now carry fixed `phase`, `reason`, and `upstreamStatus` fields
+through the private binding into background logs. Raw responses, source content,
+URLs and credentials are never included in those diagnostic fields.
+
 ## Configuration (all live operations default OFF)
 
 `wrangler.production.jsonc` defines the separate Worker, Durable Object and its
