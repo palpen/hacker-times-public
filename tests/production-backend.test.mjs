@@ -320,3 +320,12 @@ test('private failure status retains bounded diagnostics and strips arbitrary pr
  assert.ok(!JSON.stringify(status).includes('synthetic-secret'));
  assert.ok(!JSON.stringify(status).includes('synthetic-source'));
 });
+
+test('alarm storage operations stay in-object rather than re-entering its namespace',async()=>{
+ const env={AUTO_EDITORIAL_ENABLED:'true',SCHEDULE_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',NEWSROOM:{idFromName(){throw Error('Alarm must not make a self subrequest for storage');}}};
+ const s=await setup(env),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ for(const row of f.selectedStories){const source={id:row.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};source.fingerprint=await api.digest(source);await s.call('source',{generatedAt:f.generatedAt,source});}
+ await s.newsroom.alarm();assert.equal((await s.call('status',{generatedAt:f.generatedAt})).staged,3);
+ assert.equal((await s.call('status')).runner.leaseExpiresAt,null);
+ assert.ok(s.storage.alarm<=Date.now()+1000);
+});

@@ -265,3 +265,11 @@ expiry and the last claimed schedule slot without the lease token. Public
 administration remains unavailable. Runtime regression coverage now executes
 both the adapter and the scheduled alarm path in workerd with a synthetic
 provider service, in addition to Node unit tests.
+
+Alarm continuations dispatch storage operations directly to the current object's
+handler, preserving its transaction and lease fences. They do not send network
+requests back into their own namespace. Cron calls still use the private binding;
+collection batches always retain separate invocations to bound their external
+subrequest counts. This avoids the hosted self-call stall observed after the first
+article checkpoint. The runtime model-backed alarm test and a namespace-denial
+regression cover this path.

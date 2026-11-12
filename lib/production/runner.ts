@@ -5,9 +5,14 @@ import {digest} from './storage';
 import {generateEditorialCopy,EditorialModelError,MAX_RESERVED_INPUT_TOKENS} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
-type RunEnv=ProductionEnv & {_runToken?:string};
+type LocalRequest=(request:Request)=>Promise<Response>;
+type RunEnv=ProductionEnv & {_runToken?:string;_localRequest?:LocalRequest};
 export async function call(env:RunEnv,path:string,args:Record<string,unknown>={}){
- const response=await env.NEWSROOM.get(env.NEWSROOM.idFromName('production-v1')).fetch(new Request('https://newsroom.internal/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,...(env._runToken?{_runToken:env._runToken}:{})})}));
+ const request=new Request('https://newsroom.internal/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...args,...(env._runToken?{_runToken:env._runToken}:{})})});
+ // An alarm already runs inside this object. Dispatch local storage operations
+ // directly instead of making re-entrant network requests to the same object.
+ // Collection batches retain separate invocations for their subrequest budgets.
+ const response=await (env._localRequest&&path!=='collect-items'?env._localRequest(request):env.NEWSROOM.get(env.NEWSROOM.idFromName('production-v1')).fetch(request));
  if(!response.ok){const failure=await response.json() as {error:string;collection?:unknown};const details=parseCollectionDetails(failure.collection);if(details)throw new CollectionError(failure.error,details);throw new RequestError(failure.error,response.status);}
  return response.json();
 }
@@ -68,12 +73,13 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
 }
 // Hard article count plus a soft deadline leave ample room below cron's wall limit.
 // A source request can take 40s and a model request 25s; no new article after 90s.
-export async function runEdition(env:ProductionEnv){
+export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
  enabled(env.AUTO_EDITORIAL_ENABLED,'Automatic editorial workflow');
  enabled(env.MUTATIONS_ENABLED,'Mutations');
- const claim=await call(env,'run-claim') as {claimed:boolean;token:string};
+ const execution:RunEnv={...env,...(localRequest?{_localRequest:localRequest}:{})};
+ const claim=await call(execution,'run-claim') as {claimed:boolean;token:string};
  if(!claim.claimed)return {published:false,busy:true};
- const scoped:RunEnv={...env,_runToken:claim.token},started=Date.now();let continuationDelayMs=30*60_000;
+ const scoped:RunEnv={...execution,_runToken:claim.token},started=Date.now();let continuationDelayMs=30*60_000;
  try{
   const status=await call(scoped,'status') as {pending:string|null};
   // Collection is its own checkpoint: never combine it with an editorial batch.

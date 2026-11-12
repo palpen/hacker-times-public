@@ -64,7 +64,7 @@ export class Newsroom {
   if(!this.automatic())return;
   // runEdition's fenced lease and reservation ledger make alarm retries safe.
   // An uncertain provider request is never sent a second time.
-  await observeRun('alarm',()=>runEdition(this.env!));
+  await observeRun('alarm',()=>runEdition(this.env!,request=>this.fetch(request)));
  }
  async fetch(request:Request):Promise<Response>{
   try {
