@@ -13,6 +13,7 @@ const expected = {
   compatibility_date: '2026-05-15',
   compatibility_flags: ['nodejs_compat'],
   workers_dev: true,
+  routes: [{pattern: 'hackertimes.ca', custom_domain: true}, {pattern: 'www.hackertimes.ca', custom_domain: true}],
   durable_objects: {bindings: [{name: 'NEWSROOM', class_name: 'Newsroom'}]},
   migrations: [{tag: 'production-v1', new_sqlite_classes: ['Newsroom']}],
   vars: {

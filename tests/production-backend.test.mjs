@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';import {build} from 'esbuild';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-production-'));
 const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
-fs.writeFileSync(entry,`export {importArchive} from '${process.cwd()}/lib/production/archive-import';export {readBlob,writeBlob} from '${process.cwd()}/lib/production/storage';export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
+fs.writeFileSync(entry,`export {importArchive} from '${process.cwd()}/lib/production/archive-import';export {readBlob,writeBlob} from '${process.cwd()}/lib/production/storage';export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {EDITORIAL_REQUEST_POLICY} from '${process.cwd()}/lib/production/editorial-model';export {summarize,runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
 const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true});
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>x.endsWith('lib/production/auth.ts')),'removed auth module must not enter production bundle');
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>/data\/|lib\/(publication|editor|editorial-staging|lead-state)\.ts/.test(x)),'independent backend must not bundle old data/managed writer');
@@ -407,4 +407,21 @@ test('historical archive import preserves current authority and rejects changed 
  await api.writeBlob(s.storage,'root',existing);await api.importArchive(s.storage,existing,edition,manifest);
  assert.deepEqual(await api.readBlob(s.storage,'root'),existing);
  assert.equal((await s.request('import-archive',{edition})).status,503);
+});
+
+
+test('cached copy drops old front-page rank when the current selection omits it',async()=>{
+ const env={LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional-key',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+ const s=await setup(env),at=Date.now()-120000,items=pool(at);delete items[10].hnPage;delete items[10].hnRank;
+ const fixture=snapshot(await s.call('root'),at,items);await s.call('snapshot',{snapshot:fixture});
+ const selected=fixture.selectedStories.find(x=>x.id===items[10].id);assert.ok(selected);
+ const args=await author(s,fixture,selected),source=await s.call('get-source',{generatedAt:fixture.generatedAt,id:selected.id});
+ const key=await api.digest({policy:api.EDITORIAL_REQUEST_POLICY,model:env.EDITORIAL_MODEL,maxOutputTokens:1024,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ await s.call('model-reserve',{key,cost:100,dailyLimit:1000000,monthlyLimit:5000000});
+ await s.call('model-complete',{key,actualCost:50,result:{story:{...args.story,hnPage:1,hnRank:3},usage:{inputTokens:1,outputTokens:1,totalTokens:2},requested:true}});
+ const before=(await s.call('status')).modelBudget;
+ const runEnv={...env,NEWSROOM:{idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})}};
+ const staged=await api.summarize(runEnv,{generatedAt:fixture.generatedAt,id:selected.id});assert.equal(staged.revision,1);
+ const record=await s.storage.get('stage/'+fixture.generatedAt+'/'+selected.id);assert.equal(record.story.hnPage,undefined);assert.equal(record.story.hnRank,undefined);assert.equal(record.story.summary,args.story.summary);
+ assert.deepEqual((await s.call('status')).modelBudget,before);
 });

@@ -65,3 +65,31 @@ project `appgprj_6ae7d39bcfd0819185d3d4352e087cf3`. Preserve it until the Cloudf
 replacement is ready. Then configure and verify the Cloudflare custom domain,
 remove the old attachment and retire the old publisher. Do not treat a successful
 Worker deployment or enabled health flag as proof that a news edition published.
+
+
+## Domain cutover preparation — November 13, 2026 UTC
+
+The free Cloudflare zone is `bf9be3466d18e174cd7423322d440557`.
+Assigned nameservers: `dilbert.ns.cloudflare.com`, `wanda.ns.cloudflare.com`.
+Both `hackertimes.ca` and `www.hackertimes.ca` are attached to
+`hacker-times-production`; both deployment configurations preserve these routes.
+Namecheap registration remains unchanged. No email redirects were configured;
+existing MX/SPF and domain-verification TXT records were preserved.
+
+The eight public Sites editions were exported to the ignored local
+`work/migration-backup` directory. The private `/import-archive` operation accepts
+only the exact SHA-256 documents in `lib/production/archive-manifest.ts` and
+renders their original content with the current self-contained reader assets.
+It cannot replace current pointers, existing archive dates, editorial history,
+reservations, budgets, or pending work. It has no public HTTP route. Seven
+previously missing daily editions were indexed; the older November 12 edition
+was retained by version without replacing the newer Cloudflare edition.
+
+The scheduled-run investigation found one cached completed summary carrying old
+`hnPage`/`hnRank` fields when its current candidate omitted those fields. Cached
+copy now carries only editorial fields into the new authoritative selection.
+This reuses confirmed results without a second model request. A regression test
+covers removed optional fields and unchanged model spending.
+
+Do not retire the public Sites attachment until apex HTTPS returns the verified
+Cloudflare publication and historical archive pages load successfully.

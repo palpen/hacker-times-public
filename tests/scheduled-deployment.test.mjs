@@ -11,6 +11,7 @@ const staging = readWorkflow('deploy-cloudflare-staging.yml');
 
 test('scheduled deployment preserves authority and caps while enabling one half-hour trigger', () => {
   assert.doesNotThrow(() => validateScheduledConfig(config));
+  assert.deepEqual(config.routes,[{pattern:'hackertimes.ca',custom_domain:true},{pattern:'www.hackertimes.ca',custom_domain:true}]);
   for (const mutate of [
     c => {c.name += '-reset';},
     c => {c.migrations[0].tag = 'reset';},
@@ -24,6 +25,7 @@ test('scheduled deployment preserves authority and caps while enabling one half-
     c => {c.vars.PUBLICATION_ENABLED = 'false';},
     c => {c.routes = [{pattern: 'fictional.example', custom_domain: true}];},
     c => {c.env = {production: {}};},
+    c => {delete c.routes;},
   ]) {
     const changed = structuredClone(config);
     mutate(changed);
