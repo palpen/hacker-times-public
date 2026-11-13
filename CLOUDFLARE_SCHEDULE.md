@@ -36,8 +36,8 @@ npx wrangler deploy --config wrangler.scheduled.jsonc
 To stop automatic publishing, deploy the existing `wrangler.production.jsonc`
 configuration through `Deploy Cloudflare staging`. It explicitly disables all
 six live flags and removes cron. Do not roll back or delete the Durable Object.
-After domain cutover, first reconcile routes with both configs so a pause does
-not accidentally alter the reader's domain binding.
+Both configurations preserve the apex and www custom-domain routes so a pause
+does not alter the reader's domain binding.
 
 ## Cutover gate
 
@@ -56,8 +56,9 @@ See PRODUCTION_BACKEND.md for the explicit API-rank provenance and diagnostic fi
 
 Before moving the domain, verify a successful scheduled publication; matching
 HTML/API versions and complete story counts; archives, reader assets and
-comments; and operational recovery for the existing namespace. Images and old
-managed archives are not imported by this implementation. Automatic articles
+comments; and operational recovery for the existing namespace. Historical Sites
+archives and their original publisher image URLs were preserved during the
+November 13 migration described below. Newly generated automatic articles
 currently omit images pending a visual verification workflow.
 
 The existing Sites attachment is `appgdom_6ae92d1a8b788191aa85663de11d466f` for
@@ -93,3 +94,21 @@ covers removed optional fields and unchanged model spending.
 
 Do not retire the public Sites attachment until apex HTTPS returns the verified
 Cloudflare publication and historical archive pages load successfully.
+
+### Verified scheduled publication and pending DNS
+
+The November 13 05:00 UTC cron independently collected a fresh 71-story edition
+and published it at 05:05:00 UTC (00:05 Toronto). Its version is
+`e-97754809fe3a5402619bde41`, with snapshot timestamp
+`2026-11-13T05:00:27.334Z`. Public HTML, edition API, and archive index agree;
+all 71 IDs are unique. Private status shows no pending edition, active lease,
+or safety hold. The schedule remains every 30 minutes, at UTC :00 and :30.
+
+Namecheap saved the two assigned Cloudflare nameservers, verified after a page
+reload. At 05:05 UTC the .ca registry and public resolvers still returned
+`dns1.registrar-servers.com` and `dns2.registrar-servers.com`; the Cloudflare zone
+was pending activation. This is not a completed domain cutover. Keep the Sites
+custom-domain attachment and public access until the registry changes, the zone
+activates, and apex HTTPS demonstrably serves the Cloudflare edition. Then
+remove the old Sites domain attachment and restrict that site to owner access.
+The registrar and email records do not need further changes.
