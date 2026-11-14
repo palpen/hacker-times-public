@@ -1,5 +1,9 @@
 # Hacker Times public source candidate
 
+**[Visit Hacker Times → hackertimes.ca](https://hackertimes.ca/)**
+
+[![Hacker Times front page, captured November 14, 2026](docs/images/hacker-times-front-page.jpg)](https://hackertimes.ca/)
+
 For the independent Cloudflare reader and publisher, start with [PRODUCTION_BACKEND.md](PRODUCTION_BACKEND.md), [CLOUDFLARE_SCHEDULE.md](CLOUDFLARE_SCHEDULE.md), and the [Sites/Cloudflare reader parity review](READER_PARITY.md). The standalone `worker/production.ts` exposes read-only reader routes; the managed Sites authentication instructions below describe the separate `worker/index.ts` runtime.
 
 A newspaper-style reader with bounded Hacker News collection, editorial publication, topic desks, archives and discussion highlights. Built on Vinext and Cloudflare Workers.
