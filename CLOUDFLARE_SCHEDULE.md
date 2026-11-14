@@ -24,7 +24,17 @@ branch-restricted credential environment with the staging workflow, validates
 without credentials, then deploys from a clean runner at the exact tested SHA.
 The environment is still named `cloudflare-staging`; it grants access to this
 same Worker. The scheduled validator rejects changed budgets/storage, extra
-routes, alternate environments and plaintext secrets.
+routes, alternate environments and plaintext secrets. Routine releases verify
+the existing custom domains, workers.dev access and half-hour schedule, upload
+one code version, activate that exact version at 100%, and verify the deployment
+and unchanged triggers. They do not rewrite domain bindings. This avoids the
+zone-access error encountered when the scoped deployment credential tried to
+reapply already-correct custom domains after a successful code upload.
+
+This workflow requires the expected triggers to exist already. Initial setup,
+schedule activation after a pause, or intentional domain changes require the
+full deployment command below with the appropriate existing account access;
+the routine release fails instead of silently changing those resources.
 
 Deploy locally after the full checks and a pushed commit:
 
