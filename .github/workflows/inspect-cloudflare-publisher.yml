@@ -1,0 +1,38 @@
+name: Inspect Cloudflare publisher
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'palpen/hacker-times-public' &&
+      github.ref == 'refs/heads/migration/cloudflare-owned'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: cloudflare-staging
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+      CLOUDFLARE_CF_FETCH_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --workspaces=false --include=dev --include=optional --no-audit --no-fund
+      - run: |
+          node scripts/validate-scheduled-config.mjs --github
+          node --test tests/production-diagnostic.test.mjs
+          node node_modules/eslint/bin/eslint.js scripts/inspect-publisher.mjs scripts/publisher-diagnostic-worker.mjs tests/production-diagnostic.test.mjs
+          git diff --exit-code
+      - name: Read private publication status through an authenticated temporary preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
+        run: node scripts/inspect-publisher.mjs
