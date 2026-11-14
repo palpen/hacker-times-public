@@ -9,7 +9,7 @@ const flags = ['MUTATIONS_ENABLED', 'LIVE_FETCH_ENABLED', 'PUBLICATION_ENABLED',
 
 export function validateScheduledConfig(config) {
   // Only activation and the half-hour cron differ from the existing reviewed
-  // Worker. Preserve its namespace, budgets, model, rates and absence of routes.
+  // Worker. Preserve its namespace, budgets, model, rates and approved custom domains.
   if (!flags.every(key => config?.vars?.[key] === 'true') ||
       !isDeepStrictEqual(config?.triggers, {crons: ['*/30 * * * *']})) {
     throw new Error('Scheduled configuration requires six explicit live flags and one half-hour cron.');

@@ -59,7 +59,10 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
   const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
   const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
   if(reservation.state==='completed'&&reservation.result){
-   result={...reservation.result,story:{...reservation.result.story,...selected}};
+   // Reuse editorial copy, never old selection metadata. A history candidate
+   // can omit hnPage/hnRank, so spreading it over the old story leaves stale keys.
+   const {headline,summary,shortSummary,summarySource,publisher,image,imageAlt,imageCredit,articleStatus}=reservation.result.story;
+   result={...reservation.result,story:{...selected,headline,summary,shortSummary,summarySource,publisher,image,imageAlt,imageCredit,articleStatus}};
   }else if(reservation.state==='failed'&&reservation.draft){
    try{result=reviewEditorialDraft(source,selected,reservation.draft);}
    catch{throw new RequestError('Retained editorial draft still fails validation; no API call made',409);}

@@ -10,6 +10,8 @@ import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
 import {parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
+import {importArchive} from './archive-import';
+import {archiveMigrationManifest} from './archive-manifest';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
 const empty=():Root=>({schema:1,revision:0,version:'empty',archives:{},ledger:{retiredIds:[],retiredKeys:[],observations:[]}});
 function stamp(value:unknown):string {
@@ -105,6 +107,11 @@ export class Newsroom {
      const ids=args.ids,at=args.at;
      if(!Array.isArray(ids)||!ids.length||ids.length>32||ids.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(ids).size!==ids.length||typeof at!=='number'||!Number.isSafeInteger(at)||at>Date.now()+300_000||at<Date.now()-48*3600_000)throw new RequestError('Invalid bounded collection batch');
      return {ids:ids as number[],at};
+    }
+    if(path==='/import-archive'){
+     hold(root);
+     if(this.env?.MUTATIONS_ENABLED!=='true')throw new RequestError('Archive import disabled',503);
+     return importArchive(tx,root,args.edition,archiveMigrationManifest);
     }
     if(path==='/root')return root;
     if(path==='/edition'){

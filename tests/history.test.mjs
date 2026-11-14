@@ -58,6 +58,13 @@ try{
  const discovered=await discoverHistory(at,[1]);assert.equal(calls.length,13);assert.deepEqual(discovered.shortlisted.map(s=>s.id),[2]);
  assert.equal(discovered.discovery.coverage,'sampled');assert.equal(discovered.discovery.discoveredCount,2);assert.equal(discovered.discovery.shortlistedCount,1);assert.equal(discovered.discovery.limits.maxOfficialItems,254);
  assert.deepEqual(discovered.discovery.queries.map(q=>q.hitCount),Array(13).fill(2));
+ // Simulate slow responses: request deadlines should not run while waiting
+ // behind more fetches than the Worker can open. Preserve all 13 query results.
+ let active=0,peak=0,total=0;
+ globalThis.fetch=async()=>{active++;total++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,3));active--;return Response.json(envelope([raw(1)]));};
+ const bounded=await discoverHistory(at,[]);
+ assert.equal(total,13);assert.equal(peak,4);assert.equal(active,0);
+ assert.deepEqual(bounded.discovery.queries.map(q=>q.kind),queries.map(q=>q.kind));
  globalThis.fetch=async()=>Response.json(envelope([raw(1)]),{status:503});await assert.rejects(()=>discoverHistory(at,[]),/Historical HN discovery/);
  globalThis.fetch=async()=>Response.json(envelope([raw(1)]),{status:206});await assert.rejects(()=>discoverHistory(at,[]),/Historical HN discovery/);
  globalThis.fetch=async()=>new Response('not JSON',{headers:{'content-type':'application/json'}});await assert.rejects(()=>discoverHistory(at,[]),/failed/);

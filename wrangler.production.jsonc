@@ -4,10 +4,26 @@
   "account_id": "dc81a3cb74492ea63c9f3e14f13711a2",
   "main": "worker/production.ts",
   "compatibility_date": "2026-05-15",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
-  "durable_objects": {"bindings": [{"name": "NEWSROOM", "class_name": "Newsroom"}]},
-  "migrations": [{"tag": "production-v1", "new_sqlite_classes": ["Newsroom"]}],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "NEWSROOM",
+        "class_name": "Newsroom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "production-v1",
+      "new_sqlite_classes": [
+        "Newsroom"
+      ]
+    }
+  ],
   "vars": {
     "MUTATIONS_ENABLED": "false",
     "EDITORIAL_MODEL": "gpt-6-luna",
@@ -22,5 +38,17 @@
     "PUBLICATION_ENABLED": "false",
     "SCHEDULE_ENABLED": "false"
   },
-  "triggers": {"crons": []}
+  "triggers": {
+    "crons": []
+  },
+  "routes": [
+    {
+      "pattern": "hackertimes.ca",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.hackertimes.ca",
+      "custom_domain": true
+    }
+  ]
 }
