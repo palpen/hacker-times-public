@@ -1,5 +1,5 @@
 import type {Edition} from './contracts';
-import {sanitizeCommentHTML,type SafeCommentToken} from './comments';
+import {sanitizeCommentHTML,type SafeCommentToken} from './comments-core';
 import {boundedBody} from './security';
 import {HIGHLIGHT_POLICY,HIGHLIGHT_LIMITS,discussionStoryIds,validDiscussionSnapshot,type DiscussionHighlight,type DiscussionSnapshot} from './discussion-highlights';
 

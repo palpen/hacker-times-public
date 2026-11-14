@@ -2,7 +2,7 @@ import {RequestError} from '../security';
 import {CollectionError,parseCollectionDetails} from '../collection-error';
 import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
-import {generateEditorialCopy,reviewEditorialDraft,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
+import {generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
 class EditorialRetryError extends RequestError {constructor(){super('Invalid editorial output; a bounded accounted retry is available',503);}}
@@ -80,7 +80,11 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
    await call(env,'model-complete',{key,result,actualCost:Math.ceil(result.usage.inputTokens*inputPrice+result.usage.outputTokens*outputPrice)});
   }
  }
- return call(env,'stage',{generatedAt:source.generatedAt,story:result.story,sourceFingerprint:source.fingerprint});
+ // The Sites newspaper uses concise decks. Reuse the fully authored compact
+ // sentence rather than clipping the long summary or making another API call.
+ // Publisher identity comes from this pinned source, including cached copy.
+ const story={...result.story,publisher:publisherFor(selected,source),summary:result.story.shortSummary??result.story.summary};
+ return call(env,'stage',{generatedAt:source.generatedAt,story,sourceFingerprint:source.fingerprint});
 }
 // Hard article count plus a soft deadline leave ample room below cron's wall limit.
 // A source request can take 40s and a model request 25s; no new article after 90s.
@@ -118,6 +122,11 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   const after=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[]};
   if(after.missingIds.length<before.missingIds.length||retryPending)continuationDelayMs=1_000;
   if(after.missingIds.length)return {published:false,generatedAt:snapshot.generatedAt,attempted,blockedIds,missingIds:after.missingIds,checkpoint:'staged'};
+  // Start discussions in a fresh invocation after the final article. Each
+  // checkpoint collects at most four threads, independent of reader visits.
+  if(attempted){continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,attempted,blockedIds,missingIds:[],checkpoint:'staged'};}
+  const discussions=await call(scoped,'prepare-discussions',{generatedAt:snapshot.generatedAt}) as {complete:boolean};
+  if(!discussions.complete){continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'discussions'};}
   const validation=await call(scoped,'validate',{generatedAt:snapshot.generatedAt});
   if(env.PUBLICATION_ENABLED!=='true')return {validation,published:false};
   const publication=await call(scoped,'publish',{generatedAt:snapshot.generatedAt});

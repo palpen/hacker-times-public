@@ -10,7 +10,7 @@ const validId=(value:unknown):value is number=>typeof value==='number'&&Number.i
  * life) are explicit relevance proxies, not inferred votes or semantic review.
  * A rolling 24-hour comment window includes today's active older discussions. */
 export function commentRelevance(position:number,time:number,sourceTime:number){return 70*(5-position)/4+30*Math.pow(2,-Math.max(0,sourceTime-time*1000)/21600000);}
-export async function collectTrendingHighlights(edition:Edition,basePublicationVersion:string,dependencies:{fetcher?:typeof fetch;now?:()=>number}={}):Promise<DiscussionSnapshot>{
+export async function collectTrendingHighlights(edition:Edition,basePublicationVersion:string,dependencies:{fetcher?:typeof fetch;now?:()=>number;preserveCandidates?:boolean}={}):Promise<DiscussionSnapshot>{
  const fetcher=dependencies.fetcher??fetch,now=dependencies.now??Date.now,ids=trendingStoryIds(edition),started=Date.now(),sourceTime=Date.parse(edition.generatedAt);
  const controller=new AbortController();let expired=false;
  const timer=setTimeout(()=>{expired=true;controller.abort();},HIGHLIGHT_LIMITS.totalMs);
@@ -60,7 +60,7 @@ export async function collectTrendingHighlights(edition:Edition,basePublicationV
   await Promise.all(ids.slice(offset,offset+HIGHLIGHT_LIMITS.concurrency).map(async id=>{if(expired){failed.add(id);return;}await story(id);}));
  }}finally{clearTimeout(timer);controller.abort();}
  const articles=new Set<string>(),authors=new Set<string>(),comments=new Set<number>(),items:DiscussionHighlight[]=[],sources:HighlightSource[]=[];
- for(const id of ids){const h=results.get(id),s=sourceMap.get(id);if(!h||!s)continue;const identity=normalizeArticleUrl(s.url);if(articles.has(identity)||authors.has(h.author)||comments.has(h.commentId))continue;articles.add(identity);authors.add(h.author);comments.add(h.commentId);items.push(h);sources.push(s);if(items.length===16)break;}
+ for(const id of ids){const h=results.get(id),s=sourceMap.get(id);if(!h||!s)continue;const identity=normalizeArticleUrl(s.url);if(!dependencies.preserveCandidates&&(articles.has(identity)||authors.has(h.author)||comments.has(h.commentId)))continue;articles.add(identity);authors.add(h.author);comments.add(h.commentId);items.push(h);sources.push(s);if(items.length===16)break;}
  const unavailableStoryIds=ids.filter(id=>failed.has(id));
  const snapshot:DiscussionSnapshot={policy:TRENDING_HIGHLIGHT_POLICY,sourceGeneratedAt:edition.generatedAt,basePublicationVersion,storyIds:ids,sources,collectedAt:new Date(now()).toISOString(),status:unavailableStoryIds.length?(unavailableStoryIds.length===ids.length?'unavailable':'partial'):'complete',unavailableStoryIds,items};
  // Long source URLs/titles must never prevent publishing an otherwise valid

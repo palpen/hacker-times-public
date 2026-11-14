@@ -1,5 +1,7 @@
 # Hacker Times public source candidate
 
+For the independent Cloudflare reader and publisher, start with [PRODUCTION_BACKEND.md](PRODUCTION_BACKEND.md), [CLOUDFLARE_SCHEDULE.md](CLOUDFLARE_SCHEDULE.md), and the [Sites/Cloudflare reader parity review](READER_PARITY.md). The standalone `worker/production.ts` exposes read-only reader routes; the managed Sites authentication instructions below describe the separate `worker/index.ts` runtime.
+
 A newspaper-style reader with bounded Hacker News collection, editorial publication, topic desks, archives and discussion highlights. Built on Vinext and Cloudflare Workers.
 
 This sanitized development snapshot contains fictional demo editions, no publisher photos and no production Site identity or operational history. It is not a backup to restore over a live installation. Security fixes are staged here; their presence does not establish that any hosted deployment has been updated.

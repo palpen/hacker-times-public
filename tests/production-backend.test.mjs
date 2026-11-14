@@ -209,14 +209,14 @@ test('bounded automatic runs resume checkpoints and progress past unknown model 
  assert.equal((await s.storage.get('model/'+key)).state,'reserved');await assert.rejects(()=>s.call('edition'),/No published/);
 });
 test('automatic runner honors time deadline then resumes complete synthetic publication',async()=>{
- const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ const s=await setup({MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true'}),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
  for(const row of f.selectedStories){const source={id:row.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};source.fingerprint=await api.digest(source);await s.call('source',{generatedAt:f.generatedAt,source});}
  const realNow=Date.now;let clock=realNow(),advance=true;Date.now=()=>clock;
  const env={NEWSROOM:{idFromName:()=>0,get:()=>({fetch:async req=>{const op=new URL(req.url).pathname.slice(1),response=await s.request(op,await req.json());if(op==='stage'&&advance)clock+=90_001;return response;}})},AUTO_EDITORIAL_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true'};
  try{
   const partial=await api.runEdition(env);assert.equal(partial.attempted,1);assert.equal(partial.published,false);
   advance=false;let result;
-  for(let i=0;i<Math.ceil(f.selectedStories.length/3)+1;i++){result=await api.runEdition(env);if(result.publication)break;}
+  for(let i=0;i<Math.ceil(f.selectedStories.length/3)+7;i++){result=await api.runEdition(env);if(result.publication)break;}
   assert.equal(result.publication.published,true);assert.equal(result.verifiedVersion,result.publication.version);
   assert.equal((await s.call('edition')).edition.stories.length,f.selectedStories.length);
  }finally{Date.now=realNow;}
@@ -229,13 +229,14 @@ test('durable alarms continue healthy chunks promptly and back off blocked batch
  const claim=await s.call('run-claim');assert.ok(s.storage.alarm>=Date.now()+299_000);
  await s.call('run-release',{_runToken:claim.token});assert.ok(s.storage.alarm>=Date.now()+1799_000);
  await s.newsroom.alarm();assert.ok(s.storage.alarm<=Date.now()+1_000);assert.equal((await s.call('status',{generatedAt:f.generatedAt})).staged,3);
- for(let i=0;i<Math.ceil(f.selectedStories.length/3);i++){if((await s.call('status')).pending)await s.newsroom.alarm();}
+ for(let i=0;i<Math.ceil(f.selectedStories.length/3)+6;i++){if((await s.call('status')).pending)await s.newsroom.alarm();}
  assert.equal(s.storage.alarm,null);assert.equal((await s.call('edition')).edition.stories.length,f.selectedStories.length);
  env.SCHEDULE_ENABLED='false';await s.newsroom.alarm();assert.equal((await s.call('status')).pending,null);
 });
 test('real workerd alarms finish bounded chunks through the private namespace',async()=>{
  const file=path.join(dir,'alarm-worker.mjs');await build({entryPoints:['worker/production.ts'],outfile:file,bundle:true,format:'esm',platform:'browser'});
  const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`const attempts=new Map();export default {async fetch(request){
+ if(request.method==='GET')return Response.json(null);
  const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);const attempt=attempts.get(data.originalTitle)||0;attempts.set(data.originalTitle,attempt+1);
  return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:data.originalTitle==='Fictional system 0'&&attempt===0?'First fictional sentence. Second fictional sentence.':'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
  }};`}]}));
@@ -245,7 +246,7 @@ test('real workerd alarms finish bounded chunks through the private namespace',a
   const f=snapshot(await call('root'));await call('snapshot',{snapshot:f});
   for(const row of f.selectedStories){const source={id:row.id,generatedAt:f.generatedAt,kind:'article',excerpt:'A fictional system demonstrates a synthetic operation.',description:'',url:row.url,fetchedAt:new Date().toISOString(),status:'fetched'};source.fingerprint=await api.digest(source);await call('source',{generatedAt:f.generatedAt,source});}
   const lease=await call('run-claim');await call('run-release',{_runToken:lease.token,continuationDelayMs:1000});
-  const deadline=Date.now()+20_000;let status;
+  const deadline=Date.now()+35_000;let status;
   do{await new Promise(resolve=>setTimeout(resolve,250));status=await call('status');}while(status.pending&&Date.now()<deadline);
   assert.equal(status.pending,null,'actual durable alarms should continue without another cron tick');
   assert.equal((await call('edition')).edition.stories.length,f.selectedStories.length);
@@ -431,12 +432,13 @@ test('publisher outages preserve every selected story and allow complete publica
  const old=globalThis.fetch;
  try{
   for(const failure of [500,502,503,504,520,'transport']){
-   const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+   const s=await setup({MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true'}),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
    let calls=0;globalThis.fetch=async()=>{calls++;if(failure==='transport')throw new TypeError('network failed');return new Response('upstream failure',{status:failure});};
    const env={NEWSROOM:{idFromName:()=>0,get:()=>({fetch:async req=>s.request(new URL(req.url).pathname.slice(1),await req.json())})},AUTO_EDITORIAL_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true'};
-   for(let i=0;i<Math.ceil(f.selectedStories.length/3);i++)await api.runEdition(env);
+   for(let i=0;i<Math.ceil(f.selectedStories.length/3)+6;i++)await api.runEdition(env);
    const published=await s.call('edition');assert.equal(published.edition.stories.length,f.selectedStories.length);
-   assert.equal(calls,f.selectedStories.length);
+   assert.equal(calls,f.selectedStories.length+24);
+   assert.equal(published.edition.discussionHighlights.status,'unavailable');
    for(const selected of f.selectedStories){
     const story=published.edition.stories.find(x=>x.id===selected.id);
     assert.equal(story.url,selected.url);assert.equal(story.headline,selected.title);
@@ -447,4 +449,74 @@ test('publisher outages preserve every selected story and allow complete publica
    assert.equal((await s.call('status')).pending,null);
   }
  }finally{globalThis.fetch=old;}
+});
+
+
+test('automatic publication freezes Sites-style highlights in resumable request-bounded batches',async()=>{
+ const old=globalThis.fetch,env={MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',PUBLICATION_ENABLED:'true'};
+ const s=await setup(env),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ for(const row of f.selectedStories)await s.call('stage',await author(s,f,row));
+ env.NEWSROOM={idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})};
+ const ids=f.sourcePages.flatMap(p=>p.ids).slice(0,24),calls=[];
+ let insideTransaction=false;const transaction=s.storage.transaction.bind(s.storage);
+ s.storage.transaction=fn=>transaction(async tx=>{insideTransaction=true;try{return await fn(tx);}finally{insideTransaction=false;}});
+ globalThis.fetch=async(url,options)=>{
+  assert.equal(insideTransaction,false,'HN reads must not hold a storage transaction');
+  assert.equal(options.credentials,'omit');assert.equal(options.redirect,'manual');
+  const id=Number(String(url).match(/item\/(\d+)\.json$/)[1]);calls.push(id);
+  if(ids.includes(id))return Response.json({id,type:'story',title:'Fictional discussion '+id,url:'https://fictional.example/thread/'+id,time:Math.floor(Date.now()/1000)-3600,kids:Array.from({length:5},(_,i)=>id*100+i),descendants:20});
+  const parent=Math.floor(id/100);return Response.json({id,type:'comment',parent,by:'reader'+parent,time:Math.floor(Date.now()/1000)-60,text:'This fictional discussion explains why clear boundaries and careful testing help people understand a complicated system before changing how its parts work together.'});
+ };
+ try{
+  let result;
+  for(let i=0;i<6;i++){
+   const before=calls.length;result=await api.runEdition(env);assert.equal(calls.length-before,24);
+   if(i<5){assert.equal(result.checkpoint,'discussions');assert.equal((await s.call('root')).version,'empty');}
+   if(i===0){let ready;const restored=new api.Newsroom({storage:s.storage,blockConcurrencyWhile:fn=>ready=fn()},env);await ready;env.NEWSROOM.get=()=>({fetch:req=>restored.fetch(req)});}
+  }
+  assert.equal(new Set(calls).size,144,'restarts must reuse the completed checkpoint');
+  assert.equal(result.publication.published,true);
+  const p=await s.call('edition'),h=p.edition.discussionHighlights;
+  assert.equal(h.policy,'hn-trending-comments-v4');assert.equal(h.basePublicationVersion,'empty');assert.equal(h.status,'complete');assert.equal(h.items.length,16);
+  assert.deepEqual(h.storyIds,ids);assert.deepEqual(h.items.map(x=>x.storyId),ids.slice(0,16));
+  assert.equal((p.html.match(/data-highlight-page data-highlight-title/g)||[]).length,8);
+  assert.match(p.html,/What People Are Talking About/);assert.doesNotMatch(p.html,/id="more-heading"/);
+  assert.match(p.html,/news.ycombinator.com\/item\?id=10100/);assert.match(p.html,/reader101/);
+  const before=calls.length;
+  const archived=await s.call('edition',{date:f.generatedAt.slice(0,10)});assert.deepEqual(archived.edition.discussionHighlights,h);
+  await api.worker.fetch(new Request('https://reader.example/'),env);await api.worker.fetch(new Request('https://reader.example/api/archive'),env);
+  assert.equal(calls.length,before,'reading and archive browsing never recollect highlights');
+  assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,0);
+ }finally{globalThis.fetch=old;}
+});
+
+test('partial discussion failures stay explicit and a safety hold prevents checkpoint activation',async()=>{
+ const old=globalThis.fetch,env={MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true'};
+ const s=await setup(env),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ for(const row of f.selectedStories)await s.call('stage',await author(s,f,row));
+ let calls=0;globalThis.fetch=async()=>{calls++;return new Response('Unavailable',{status:503});};
+ try{
+  const first=await s.call('prepare-discussions',{generatedAt:f.generatedAt});assert.equal(first.complete,false);assert.equal(calls,4);
+  const saved=await s.storage.get('discussion/'+f.generatedAt+'/batch/0');assert.equal(saved.status,'unavailable');assert.deepEqual(saved.items,[]);
+  const invalid={...saved,sourceGeneratedAt:'2020-01-01T00:00:00.000Z'};
+  await assert.rejects(()=>s.call('save-discussion-batch',{generatedAt:f.generatedAt,index:1,snapshot:invalid}),/Invalid pinned/);
+  let stopped=false;globalThis.fetch=async()=>{if(!stopped){stopped=true;await s.call('failure',{generatedAt:f.generatedAt,kind:'safety_stop'});}return Response.json(null);};
+  await assert.rejects(()=>s.call('prepare-discussions',{generatedAt:f.generatedAt}),/safety stop/);
+  assert.equal(await s.storage.get('discussion/'+f.generatedAt+'/batch/1'),undefined);
+  assert.equal((await s.call('root')).version,'empty');
+ }finally{globalThis.fetch=old;}
+});
+
+test('pinned publisher metadata and authored compact decks survive model-cache reuse without spending',async()=>{
+ const env={MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+ const s=await setup(env),f=snapshot(await s.call('root')),selected=f.selectedStories[0];await s.call('snapshot',{snapshot:f});
+ const source={id:selected.id,generatedAt:f.generatedAt,kind:'article',excerpt:'The Fictional Gazette describes a synthetic paper sorting system.',description:'',publisher:'The Fictional Gazette',url:selected.url,fetchedAt:new Date().toISOString(),status:'fetched'};source.fingerprint=await api.digest(source);await s.call('source',{generatedAt:f.generatedAt,source});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const short='A fictional system sorts paper by color.';
+ await s.call('model-reserve',{key,cost:100,dailyLimit:1000,monthlyLimit:2000});
+ await s.call('model-complete',{key,actualCost:50,result:{story:{...selected,headline:selected.title,summary:'A longer previously generated summary that should not expand the newspaper card.',shortSummary:short,summarySource:'article',publisher:'fictional.example',articleStatus:'fetched',image:null,imageAlt:'',imageCredit:''},usage:{inputTokens:1,outputTokens:1,totalTokens:2},requested:true}});
+ const before=(await s.call('status')).modelBudget;
+ env.NEWSROOM={idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})};await api.summarize(env,{generatedAt:f.generatedAt,id:selected.id});
+ const {story}=await s.storage.get('stage/'+f.generatedAt+'/'+selected.id);
+ assert.equal(story.publisher,'The Fictional Gazette');assert.equal(story.summary,short);assert.equal(story.shortSummary,short);assert.deepEqual((await s.call('status')).modelBudget,before);
 });
