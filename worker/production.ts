@@ -5,6 +5,7 @@ import {withFooterTimestamp} from '../lib/footer-timestamp';
 import {createCommentsService} from '../lib/comments-core';
 import type {ProductionEnv,Publication} from '../lib/production/types';
 import {observeRun} from '../lib/production/run-log';
+import {readinessResponse} from '../lib/production/readiness';
 import {call,enabled,collect,runEdition} from '../lib/production/runner';
 import type {ImageAsset} from '../lib/production/images';
 export {Newsroom} from '../lib/production/newsroom';
@@ -21,6 +22,7 @@ const worker={
    if(decodedPath==='/admin'||decodedPath.startsWith('/admin/'))return secureResponse(new Response(request.method==='HEAD'?null:'Not found',{status:404,headers:{'Cache-Control':'no-store'}}));
     if(!['GET','HEAD'].includes(request.method))throw new RequestError('Method not allowed',405);
     if(path==='/healthz')response=Response.json({mode:'production',publicationEnabled:env.PUBLICATION_ENABLED==='true',scheduleEnabled:env.SCHEDULE_ENABLED==='true'});
+    else if(path==='/readyz')response=await readinessResponse(env);
     else if(/^\/images\/[a-f0-9]{64}$/.test(path)){
      const hash=path.slice('/images/'.length),asset=await call(env,'image',{hash}) as ImageAsset;
      const headers={'Content-Type':asset.mime,'Cache-Control':'public, max-age=31536000, immutable',ETag:'"'+hash+'"'};

@@ -97,6 +97,39 @@ test('public worker denies forged identity, default-off writes, unknown routes a
  const fixture=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:fixture});for(const row of fixture.selectedStories)await s.call('stage',await author(s,fixture,row));await s.call('validate',{generatedAt:fixture.generatedAt});const result=await s.call('publish',{generatedAt:fixture.generatedAt});
  const response=await api.worker.fetch(new Request('https://reader.example/?refresh=1'),env);assert.equal(response.status,200);assert.equal(response.headers.get('X-Edition-Version'),result.version);assert.equal(response.headers.get('Cache-Control'),'no-store');
 });
+test('readiness checks current publication freshness without exposing failures or changing state',async()=>{
+ const now=Date.now(),originalNow=Date.now;
+ Date.now=()=>now;
+ let result,failed=false;
+ const env={NEWSROOM:{idFromName:name=>{assert.equal(name,'production-v1');return name;},get:()=>({fetch:async request=>{
+  assert.equal(new URL(request.url).pathname,'/edition');
+  assert.deepEqual(await request.json(),{});
+  if(failed)throw Error('private diagnostic must not escape');
+  return Response.json(result);
+ }})}};
+ try{
+  for(const [age,status,label] of [[0,200,'ready'],[2700000,200,'ready'],[2700001,503,'stale'],[-1,503,'invalid_timestamp']]){
+   result={version:'e-fictional',edition:{generatedAt:new Date(now-age).toISOString()}};
+   const response=await api.worker.fetch(new Request('https://reader.example/readyz?date=2000-01-01'),env);
+   assert.equal(response.status,status);assert.equal(response.headers.get('Cache-Control'),'no-store');
+   const body=await response.json();assert.equal(body.status,label);assert.equal(body.maxAgeSeconds,2700);
+  }
+  for(const generatedAt of [undefined,null,'not-a-date']){
+   result={version:'e-fictional',edition:{generatedAt}};
+   assert.equal((await api.worker.fetch(new Request('https://reader.example/readyz'),env)).status,503);
+  }
+  failed=true;
+  const failure=await api.worker.fetch(new Request('https://reader.example/readyz'),env);
+  assert.equal(failure.status,503);assert.equal(failure.headers.get('Cache-Control'),'no-store');
+  assert.deepEqual(await failure.json(),{status:'unavailable',maxAgeSeconds:2700});
+  const head=await api.worker.fetch(new Request('https://reader.example/readyz',{method:'HEAD'}),env);
+  assert.equal(head.status,503);assert.equal(await head.text(),'');
+  const empty=await setup();
+  const emptyEnv={NEWSROOM:{idFromName:x=>x,get:()=>({fetch:req=>empty.request(new URL(req.url).pathname.slice(1),{})})}};
+  assert.equal((await api.worker.fetch(new Request('https://reader.example/readyz'),emptyEnv)).status,503);
+  assert.equal((await empty.call('root')).version,'empty');
+ }finally{Date.now=originalNow;}
+});
 test('storage corruption never silently initializes fresh history',async()=>{
  const s=await setup();await s.storage.delete('root/count');let ready;new api.Newsroom({storage:s.storage,blockConcurrencyWhile:fn=>ready=fn()});await assert.rejects(()=>ready,/authority missing/);
 });
