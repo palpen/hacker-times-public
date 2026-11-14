@@ -21,10 +21,10 @@ export async function collectSource(s:Snapshot,id:number):Promise<Source>{
   source={id,generatedAt:s.generatedAt,kind:excerpt?'hn_post':'unavailable',excerpt,description:'',url:selected.url,fetchedAt:new Date().toISOString(),status:excerpt?'hn_self_post':'source_unavailable'};
  }else{
   const result=await article(selected.url);
-  // Transport/server failures remain retryable. A publisher rate limit is
-  // explicit unavailability: keep the link and original title without a summary,
-  // then try again on a later edition rather than hammering that publisher.
-  if(result.articleStatus==='fetch_failed'||/^unavailable_http_5/.test(result.articleStatus))throw new RequestError('Publisher source temporarily unavailable',502);
+  // A publisher outage must not pin the entire newsroom to this edition.
+  // Preserve the selected link/title with no summary, just as for rate limits.
+  // Sources are scoped to this snapshot, so the next edition fetches again.
+  // HN collection/identity errors above still stop publication.
   source={id,generatedAt:s.generatedAt,kind:result.articleStatus==='fetched'?'article':'unavailable',excerpt:result.excerpt,description:('description' in result?result.description:'')||'',url:selected.url,fetchedAt:new Date().toISOString(),status:result.articleStatus==='unavailable_http_429'?'temporarily_rate_limited':result.articleStatus};
  }
  return {...source,fingerprint:await digest(source)};

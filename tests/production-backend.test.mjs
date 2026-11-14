@@ -425,3 +425,26 @@ test('cached copy drops old front-page rank when the current selection omits it'
  const record=await s.storage.get('stage/'+fixture.generatedAt+'/'+selected.id);assert.equal(record.story.hnPage,undefined);assert.equal(record.story.hnRank,undefined);assert.equal(record.story.summary,args.story.summary);
  assert.deepEqual((await s.call('status')).modelBudget,before);
 });
+
+
+test('publisher outages preserve every selected story and allow complete publication',async()=>{
+ const old=globalThis.fetch;
+ try{
+  for(const failure of [500,502,503,504,520,'transport']){
+   const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+   let calls=0;globalThis.fetch=async()=>{calls++;if(failure==='transport')throw new TypeError('network failed');return new Response('upstream failure',{status:failure});};
+   const env={NEWSROOM:{idFromName:()=>0,get:()=>({fetch:async req=>s.request(new URL(req.url).pathname.slice(1),await req.json())})},AUTO_EDITORIAL_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true'};
+   for(let i=0;i<Math.ceil(f.selectedStories.length/3);i++)await api.runEdition(env);
+   const published=await s.call('edition');assert.equal(published.edition.stories.length,f.selectedStories.length);
+   assert.equal(calls,f.selectedStories.length);
+   for(const selected of f.selectedStories){
+    const story=published.edition.stories.find(x=>x.id===selected.id);
+    assert.equal(story.url,selected.url);assert.equal(story.headline,selected.title);
+    assert.equal(story.summarySource,'unavailable');assert.equal(story.summary,'');assert.equal(story.shortSummary,'');
+    const source=await s.storage.get('source/'+f.generatedAt+'/'+selected.id);
+    assert.equal(source.status,failure==='transport'?'fetch_failed':'unavailable_http_'+failure);
+   }
+   assert.equal((await s.call('status')).pending,null);
+  }
+ }finally{globalThis.fetch=old;}
+});
