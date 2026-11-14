@@ -9,7 +9,8 @@ validateDispatchContext(process.env);
 if(!process.env.CLOUDFLARE_API_TOKEN)throw new Error('Existing deployment credential required.');
 const directory=mkdtempSync(join(tmpdir(),'hacker-times-inspect-'));
 const config=join(directory,'wrangler.json');
-writeFileSync(config,JSON.stringify({name:'hacker-times-private-inspection',account_id:'dc81a3cb74492ea63c9f3e14f13711a2',compatibility_date:'2026-05-15',workers_dev:false,durable_objects:{bindings:[{name:'NEWSROOM',class_name:'Newsroom',script_name:'hacker-times-production'}]}}));
+writeFileSync(config,JSON.stringify({name:'hacker-times-production',account_id:'dc81a3cb74492ea63c9f3e14f13711a2',compatibility_date:'2026-05-15',workers_dev:false,durable_objects:{bindings:[{name:'NEWSROOM',class_name:'Newsroom',script_name:'hacker-times-production'}]}}));
+const deadline=setTimeout(()=>{console.error('Private preview timed out; no publication changes were requested.');process.exit(1);},90_000);
 let worker;
 try{
   worker=await unstable_dev(fileURLToPath(new URL('./publisher-diagnostic-worker.mjs',import.meta.url)),{config,local:false,ip:'127.0.0.1',port:0,logLevel:'error',experimental:{disableExperimentalWarning:true,showInteractiveDevSession:false,watch:false}});
@@ -18,5 +19,6 @@ try{
   console.log('Publisher diagnostic:',JSON.stringify(await response.json()));
 }finally{
   await worker?.stop();
+  clearTimeout(deadline);
   rmSync(directory,{recursive:true,force:true});
 }
