@@ -10,6 +10,12 @@ import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
 import {parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
+import {importArchive} from './archive-import';
+import {archiveMigrationManifest} from './archive-manifest';
+import {collectTrendingHighlights} from '../collect-trending-highlights';
+import {validDiscussionSnapshot,type DiscussionSnapshot} from '../discussion-highlights';
+import {discussionBatchCount,discussionBatchEdition,checkDiscussionBatch,combineDiscussionBatches} from './discussions';
+import type {Edition} from '../contracts';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
 const empty=():Root=>({schema:1,revision:0,version:'empty',archives:{},ledger:{retiredIds:[],retiredKeys:[],observations:[]}});
 function stamp(value:unknown):string {
@@ -18,6 +24,7 @@ function stamp(value:unknown):string {
 function snapshotKey(at:string){return 'snapshot/'+stamp(at);}
 function stageKey(at:string,id:number){return 'stage/'+stamp(at)+'/'+id;}
 function sourceKey(at:string,id:number){return 'source/'+stamp(at)+'/'+id;}
+function discussionKey(at:string){return 'discussion/'+stamp(at);}
 function hold(root:Root){if(root.safetyStop)throw new RequestError('Explicit safety stop: no retry, reconstruction, fallback or alternate publisher',409);}
 async function rootAt(store:Store):Promise<Root>{
  const root=await readBlob<Root>(store,'root');if(!root)throw new RequestError('Publication authority missing; recovery required',503);
@@ -46,6 +53,11 @@ async function checkedEdition(store:Store,s:Snapshot,root:Root){
   const headline=prior.edition.stories[0].headline;
   if(edition.stories[0].summarySource==='unavailable'&&headline!==edition.stories[0].title)throw new RequestError('Unavailable incumbent conflicts with preserved headline; review required',409);
   edition.stories[0].headline=headline;
+ }
+ const highlights=await store.get<DiscussionSnapshot>(discussionKey(s.generatedAt));
+ if(highlights){
+  if(!validDiscussionSnapshot(highlights,edition,s.basePublicationVersion))throw new RequestError('Saved discussions do not match this edition',409);
+  edition.discussionHighlights=highlights;
  }
  return edition;
 }
@@ -97,7 +109,7 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
     }
     if(path==='/collect-items'){
      hold(root);
@@ -105,6 +117,11 @@ export class Newsroom {
      const ids=args.ids,at=args.at;
      if(!Array.isArray(ids)||!ids.length||ids.length>32||ids.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(ids).size!==ids.length||typeof at!=='number'||!Number.isSafeInteger(at)||at>Date.now()+300_000||at<Date.now()-48*3600_000)throw new RequestError('Invalid bounded collection batch');
      return {ids:ids as number[],at};
+    }
+    if(path==='/import-archive'){
+     hold(root);
+     if(this.env?.MUTATIONS_ENABLED!=='true')throw new RequestError('Archive import disabled',503);
+     return importArchive(tx,root,args.edition,archiveMigrationManifest);
     }
     if(path==='/root')return root;
     if(path==='/edition'){
@@ -203,12 +220,31 @@ export class Newsroom {
     }
     await snapshotAt(tx,at,root);
     if(path==='/selection')return s;
+    if(path==='/prepare-discussions'||path==='/save-discussion-batch'){
+     if(this.env?.LIVE_FETCH_ENABLED!=='true'||this.env?.MUTATIONS_ENABLED!=='true')throw new RequestError('Discussion collection is disabled',503);
+     const edition=await checkedEdition(tx,s,root);
+     if(edition.discussionHighlights)return {complete:true,items:edition.discussionHighlights.items.length};
+     const count=discussionBatchCount(edition),batches:DiscussionSnapshot[]=[];
+     for(let index=0;index<count;index++){
+      const key=discussionKey(at)+'/batch/'+index,existing=await tx.get<DiscussionSnapshot>(key);
+      if(existing){checkDiscussionBatch(existing,edition,s.basePublicationVersion!,index);batches.push(existing);continue;}
+      if(path==='/prepare-discussions')return {complete:false,index,edition,base:s.basePublicationVersion};
+      if(args.index!==index)throw new RequestError('Discussion checkpoint changed',409);
+      checkDiscussionBatch(args.snapshot,edition,s.basePublicationVersion!,index);
+      await tx.put(key,args.snapshot);batches.push(args.snapshot);
+      if(index+1<count)return {complete:false,collected:index+1,total:count};
+     }
+     const combined=combineDiscussionBatches(edition,s.basePublicationVersion!,batches);
+     await tx.put(discussionKey(at),combined);await tx.delete('validation/'+at);
+     return {complete:true,items:combined.items.length,status:combined.status};
+    }
     if(path==='/run-progress'){
      if(!s.selectedStories.some(x=>x.id===args.id))throw new RequestError('Invalid checkpoint article');
      await tx.put('run/cursor/'+at,args.id);return {saved:true};
     }
     if(path==='/source'){
      const source=args.source as Source;
+     if(source?.publisher!==undefined&&(typeof source.publisher!=='string'||source.publisher.length>240||/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)))throw new RequestError('Invalid source publisher');
      if(!source||source.generatedAt!==at||!s.selectedStories.some(x=>x.id===source.id&&x.url===source.url)||!['article','hn_post','unavailable'].includes(source.kind)||source.excerpt.length>8500||source.description.length>700||source.fingerprint!==await digest({...source,fingerprint:undefined}))throw new RequestError('Invalid source record');
      const key=sourceKey(at,source.id),existing=await tx.get<Source>(key);
      if(existing&&existing.fingerprint!==source.fingerprint)throw new RequestError('Source already saved; use existing verified work',409);
@@ -252,6 +288,13 @@ export class Newsroom {
    if(path==='/collect-items'){
     const batch=result as {ids:number[];at:number};
     return Response.json(await fetchOfficialItems(batch.ids,batch.at),{headers:{'Cache-Control':'no-store'}});
+   }
+   if(path==='/prepare-discussions'&&!(result as {complete:boolean}).complete){
+    const plan=result as {index:number;edition:Edition;base:string};
+    const snapshot=await collectTrendingHighlights(discussionBatchEdition(plan.edition,plan.index),plan.base,{preserveCandidates:true});
+    // Re-enter only the local handler, after network collection, to recheck the
+    // lease, safety hold and publication base before pinning this checkpoint.
+    return this.fetch(new Request('https://newsroom.internal/save-discussion-batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({generatedAt:args.generatedAt,_runToken:args._runToken,index:plan.index,snapshot})}));
    }
    return Response.json(result,{headers:{'Cache-Control':'no-store'}});
   }catch(error){return Response.json({error:error instanceof RequestError?error.message:'Backend operation failed; preserve edition and inspect logs',...(error instanceof CollectionError?{collection:parseCollectionDetails(error.details)}:{})},{status:error instanceof RequestError?error.status:503,headers:{'Cache-Control':'no-store'}});}

@@ -42,5 +42,15 @@
     "crons": [
       "*/30 * * * *"
     ]
-  }
+  },
+  "routes": [
+    {
+      "pattern": "hackertimes.ca",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.hackertimes.ca",
+      "custom_domain": true
+    }
+  ]
 }

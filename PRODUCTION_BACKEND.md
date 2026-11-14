@@ -308,3 +308,8 @@ invalid. An exhausted, retained draft is revalidated against the pinned source
 and current output rules before use, without a new provider request or charge.
 The regression suite covers both unchanged name punctuation and rejecting a
 second real sentence, plus no-cost draft reuse through the runner.
+
+
+## Reader parity update
+
+See [READER_PARITY.md](READER_PARITY.md) for the complete comparison and release boundary. After all required articles are staged, the automatic runner now collects the existing Sites v4 discussion highlights in six resumable four-thread checkpoints. Each checkpoint performs at most 24 upstream reads outside storage transactions. The final immutable snapshot is validated with the edition before atomic publication; readers and archives never recollect it. Partial/unavailable comment results remain explicit and do not alter story selection. Publisher metadata is preserved, and generated newspaper decks reuse the authored compact sentence without an extra model call. Automated image review and a protected publishing dashboard remain deferred.

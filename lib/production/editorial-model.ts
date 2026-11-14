@@ -69,13 +69,13 @@ function preflight(message: string): never {
 function boundedString(value: unknown, limit: number): value is string {
   return typeof value === 'string' && value.length <= limit;
 }
-function publisherFor(selected: Candidate): string {
+export function publisherFor(selected: Candidate, source?:Source): string {
   try {
     const url = new URL(selected.url);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || !url.hostname) {
       return preflight('Invalid selected publisher URL');
     }
-    const publisher = url.hostname.replace(/^www\./, '');
+    const publisher = source?.kind==='hn_post'?'Hacker News':source?.kind==='article'&&typeof source.publisher==='string'&&source.publisher.trim()&&source.publisher.length<=240&&!/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)?source.publisher.trim():url.hostname.replace(/^www\./, '');
     if (publisher.length > 240) return preflight('Selected publisher name exceeds limits');
     return publisher;
   } catch {
@@ -226,7 +226,7 @@ export function reviewEditorialDraft(source:Source,selected:Candidate,draft:unkn
   if(source.kind==='unavailable'||(!source.excerpt.trim()&&!source.description.trim()))return preflight('Pinned source evidence required for draft review');
   const provenance=source.kind==='hn_post'?'hn_post':source.excerpt.trim()?'article':'page_description';
   const usage={inputTokens:0,outputTokens:0,totalTokens:0};
-  return {story:makeStory(source,selected,publisherFor(selected),validateCopy(draft,provenance,selected.title,usage)),usage,requested:false};
+  return {story:makeStory(source,selected,publisherFor(selected,source),validateCopy(draft,provenance,selected.title,usage)),usage,requested:false};
 }
 
 /**
@@ -241,7 +241,7 @@ export async function generateEditorialCopy(
   fetcher: typeof fetch = fetch,
 ): Promise<EditorialModelResult> {
   checkSource(source, selected);
-  const publisher = publisherFor(selected);
+  const publisher = publisherFor(selected,source);
   const evidence = source.kind === 'unavailable' ? '' : source.kind === 'hn_post' ? source.excerpt.trim() :
     source.excerpt.trim() || source.description.trim();
   if (!evidence) {
