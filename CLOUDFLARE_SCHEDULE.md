@@ -25,9 +25,11 @@ without credentials, then deploys from a clean runner at the exact tested SHA.
 The environment is still named `cloudflare-staging`; it grants access to this
 same Worker. The scheduled validator rejects changed budgets/storage, extra
 routes, alternate environments and plaintext secrets. Routine releases verify
-the existing custom domains, workers.dev access and half-hour schedule, upload
+agreement between the public readers, workers.dev access and half-hour schedule, upload
 one code version, activate that exact version at 100%, and verify the deployment
-and unchanged triggers. They do not rewrite domain bindings. This avoids the
+and unchanged schedule. They do not rewrite domain bindings. Domain health checks
+use public HTTP responses, so the deployment token needs no DNS/zone read access.
+This avoids the
 zone-access error encountered when the scoped deployment credential tried to
 reapply already-correct custom domains after a successful code upload.
 
