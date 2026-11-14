@@ -56,9 +56,9 @@ test('scheduled and pause deployments serialize against the same Worker with iso
 });
 
 const version = '12345678-1234-1234-1234-123456789abc';
-const triggers = () => ({domains:config.routes.map(route=>({hostname:route.pattern,service:config.name,environment:'production'})),schedules:{schedules:[{cron:'*/30 * * * *'}]},subdomain:{enabled:true}});
+const triggers = () => ({readers:[...config.routes.map(route=>'https://'+route.pattern),'https://hacker-times-production.pspenano.workers.dev'].map(origin=>({origin,status:200,version:'e-'+'a'.repeat(24),headerVersion:'e-'+'a'.repeat(24),health:{mode:'production',publicationEnabled:true,scheduleEnabled:true}})),schedules:{schedules:[{cron:'*/30 * * * *'}]},subdomain:{enabled:true}});
 test('code releases refuse changed domains, schedules and incomplete version activation', async () => {
-  for (const mutate of [value=>value.domains.pop(), value=>value.domains[0].service='another-worker', value=>value.domains[0].environment='other', value=>value.schedules.schedules.push({cron:'* * * * *'}), value=>value.subdomain.enabled=false]) {
+  for (const mutate of [value=>value.readers.pop(), value=>value.readers[0].origin='https://other.example', value=>value.readers[0].version='e-'+'b'.repeat(24), value=>value.readers[0].health.publicationEnabled=false, value=>value.schedules.schedules.push({cron:'* * * * *'}), value=>value.subdomain.enabled=false]) {
     const changed=triggers();mutate(changed);assert.throws(()=>validateLiveTriggers(config,changed));
     let calls=0;
     await assert.rejects(deployScheduledVersion({config,sha:'a'.repeat(40),readTriggers:async()=>changed,runWrangler:()=>{calls++;}}));
