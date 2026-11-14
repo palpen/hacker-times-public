@@ -152,3 +152,22 @@ strict response validation. A batch is fully settled before propagating a failur
 The bounded live collection succeeded and pinned a fresh 73-story snapshot at
 `2026-11-14T00:03:19.317Z`. A regression verifies the concurrency bound and that
 all 13 queries and their order are preserved.
+
+
+Final verification: subsequent scheduled snapshots at 01:30:28 UTC
+(`e-abc1bf4dde803aa262b0498d`) and 02:00:27 UTC
+(`e-d701fdd63a372007220ce166`, 75 stories) published successfully. Both public
+hostnames and workers.dev agree; the public footer displays November 13 at
+9:00 PM EST. Private status is idle with no pending edition or safety hold.
+The schedule remains `*/30 * * * *` and both custom-domain routes remain attached.
+History-query fix commit `2527902` is deployed at 100% as Worker version
+`db4acda1-8e60-4956-ae8d-fcaf6e69b885`. Wrangler lost its final response after
+upload; the deployments API independently confirmed activation, and live
+schedule/domain APIs plus public readback confirmed the resulting state.
+
+The old Sites custom-domain attachment was removed after checking apex HTTPS,
+historical HTML/API, favicon/font license, and live comments. The old Site is
+now owner-only (`custom`, no other users/groups); its unauthenticated edition
+endpoint returns 401 and its custom-domain list is empty. Source and archives
+remain preserved as a private backup. The temporary diagnostic mutation/probe
+routes were removed and the local preview/tail sessions stopped.
