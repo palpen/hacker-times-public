@@ -26,7 +26,7 @@ export async function collectSource(s:Snapshot,id:number):Promise<Source>{
   // Sources are scoped to this snapshot, so the next edition fetches again.
   // HN collection/identity errors above still stop publication.
   const publisher='publisher' in result?result.publisher?.trim()??'':'';
-  source={id,generatedAt:s.generatedAt,kind:result.articleStatus==='fetched'?'article':'unavailable',excerpt:result.excerpt,description:('description' in result?result.description:'')||'',...(publisher&&!/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(publisher)?{publisher}:{}),url:selected.url,fetchedAt:new Date().toISOString(),status:result.articleStatus==='unavailable_http_429'?'temporarily_rate_limited':result.articleStatus};
+  source={id,generatedAt:s.generatedAt,kind:result.articleStatus==='fetched'?'article':'unavailable',excerpt:result.excerpt,description:('description' in result?result.description:'')||'',...(result.imageCandidates?.[0]?{imageCandidate:result.imageCandidates[0]}:{}),...(publisher&&!/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(publisher)?{publisher}:{}),url:selected.url,fetchedAt:new Date().toISOString(),status:result.articleStatus==='unavailable_http_429'?'temporarily_rate_limited':result.articleStatus};
  }
  return {...source,fingerprint:await digest(source)};
 }

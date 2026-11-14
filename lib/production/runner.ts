@@ -4,6 +4,7 @@ import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
 import {generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
+import {processImage,type ImagePlan} from './image-runner';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
 class EditorialRetryError extends RequestError {constructor(){super('Invalid editorial output; a bounded accounted retry is available',503);}}
 type LocalRequest=(request:Request)=>Promise<Response>;
@@ -125,6 +126,11 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   // Start discussions in a fresh invocation after the final article. Each
   // checkpoint collects at most four threads, independent of reader visits.
   if(attempted){continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,attempted,blockedIds,missingIds:[],checkpoint:'staged'};}
+  const image=await call(scoped,'image-next',{generatedAt:snapshot.generatedAt}) as ImagePlan;
+  if(!image.complete){
+   await processImage(scoped,image,(path,args)=>call(scoped,path,args));
+   continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'images'};
+  }
   const discussions=await call(scoped,'prepare-discussions',{generatedAt:snapshot.generatedAt}) as {complete:boolean};
   if(!discussions.complete){continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'discussions'};}
   const validation=await call(scoped,'validate',{generatedAt:snapshot.generatedAt});
