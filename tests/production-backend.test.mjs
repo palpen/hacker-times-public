@@ -238,7 +238,7 @@ test('real workerd alarms finish bounded chunks through the private namespace',a
  const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`const attempts=new Map();export default {async fetch(request){
  if(request.method==='GET')return Response.json(null);
  const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);const attempt=attempts.get(data.originalTitle)||0;attempts.set(data.originalTitle,attempt+1);
- return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:data.originalTitle==='Fictional system 0'&&attempt===0?'First fictional sentence. Second fictional sentence.':'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
+ return Response.json({status:'completed',usage:{input_tokens:700,output_tokens:150,total_tokens:850},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:data.originalTitle,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:data.originalTitle==='Fictional system 0'&&attempt===0?'a'.repeat(281):'A fictional system demonstrates a synthetic operation.',summarySource:'article'})}]}]});
  }};`}]}));
  try{
   const ns=await mf.getDurableObjectNamespace('NEWSROOM'),stub=ns.get(ns.idFromName('production-v1'));
@@ -250,7 +250,7 @@ test('real workerd alarms finish bounded chunks through the private namespace',a
   do{await new Promise(resolve=>setTimeout(resolve,250));status=await call('status');}while(status.pending&&Date.now()<deadline);
   assert.equal(status.pending,null,'actual durable alarms should continue without another cron tick');
   assert.equal((await call('edition')).edition.stories.length,f.selectedStories.length);
-  assert.equal((await call('status',{generatedAt:f.generatedAt})).failure.details.code,'short_summary_sentence','one deliberately invalid response was recovered automatically');
+  assert.equal((await call('status',{generatedAt:f.generatedAt})).failure.details.code,'copy_schema','one deliberately overlength response was recovered automatically');
  }finally{await mf.dispose();}
 });
 test('entire public admin surface is404 without auth, body parsing or namespace access',async()=>{
@@ -381,7 +381,7 @@ test('corrected validation reuses a retained draft without another model charge 
  const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
  const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
  await s.call('model-reserve',{key,cost:100,dailyLimit:1000,monthlyLimit:2000});
- const prior=await s.storage.get('model/'+key),draft={headline:row.title,summary:'A fictional system sorts paper.',shortSummary:'Lena Q. Finch describes a fictional system that sorts paper.',summarySource:'article'};
+ const prior=await s.storage.get('model/'+key),draft={headline:row.title,summary:'A fictional system sorts paper.',shortSummary:'A fictional system sorts paper. It uses color',summarySource:'article'};
  await s.storage.put('model/'+key,{...prior,state:'failed',attempt:3,retryable:true,draft});
  for(const other of f.selectedStories.slice(1)){const value={id:other.id,generatedAt:f.generatedAt,kind:'unavailable',excerpt:'',description:'',url:other.url,fetchedAt:new Date().toISOString(),status:'source_unavailable'};value.fingerprint=await api.digest(value);await s.call('source',{generatedAt:f.generatedAt,source:value});}
  const env={NEWSROOM:{idFromName:()=>0,get:()=>({fetch:async req=>s.request(new URL(req.url).pathname.slice(1),await req.json())})},AUTO_EDITORIAL_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};

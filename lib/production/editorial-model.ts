@@ -153,9 +153,8 @@ function transientResponse(status: number, body?: JsonObject): boolean {
 function failAfterRequest(kind: EditorialModelFailure, message: string, usage: ModelUsage | null, details: ModelFailureDetails = {phase:"output"}, draft?:Record<string,string>): never {
   const codes:Record<string,string>={
     'Editorial copy failed its strict schema':'copy_schema',
-    'Editorial copy requires clean source-backed text and one compact sentence':'copy_text',
+    'Editorial copy requires clean nonempty source-backed text':'copy_text',
     'Editorial copy contains forbidden control characters':'copy_controls',
-    'Short summary must contain exactly one complete sentence':'short_summary_sentence',
     'Editorial copy is not valid JSON':'copy_json',
     'Editorial response did not complete':'response_incomplete',
     'Invalid editorial output envelope':'output_envelope',
@@ -187,17 +186,6 @@ function outputText(body: JsonObject, usage: ModelUsage): string {
   if (texts.length !== 1) return failAfterRequest('validation', 'Editorial response requires one structured result', usage);
   return texts[0];
 }
-function singleSentence(text: string): boolean {
-  // Intentionally conservative: questionable output is reviewed rather than
-  // silently shortened or published. Ask the model to avoid title abbreviations.
-  return /[.!?]["'”’)]?$/.test(text) &&
-    Array.from(new Intl.Segmenter('en', { granularity: 'sentence' }).segment(
-      // ICU can split a middle initial from its surname. Mask those punctuation
-      // marks for segmentation only; the published text remains byte-for-byte.
-      text.replace(/\b([A-Z][a-z]+)\s+((?:[A-Z]\.\s+)+)(?=[A-Z][a-z]+\b)/g,
-        (_match,name:string,initials:string)=>name+' '+initials.replace(/\./g,''))
-    )).length === 1;
-}
 function validateCopy(value: unknown, provenance: NonNullable<Story['summarySource']>, title: string, usage: ModelUsage) {
   const keys = ['headline', 'summary', 'shortSummary', 'summarySource'];
   if (!object(value) || Object.keys(value).length !== keys.length || keys.some(key => !(key in value)) ||
@@ -213,9 +201,8 @@ function validateCopy(value: unknown, provenance: NonNullable<Story['summarySour
   } else {
     // Normalize presentation whitespace without adding, deleting or inventing words.
     for(const key of ['headline','summary','shortSummary'] as const)copy[key]=copy[key].replace(/\s+/g,' ').trim();
-    if([copy.headline,copy.summary,copy.shortSummary].some(text=>!text))return failAfterRequest('validation','Editorial copy requires clean source-backed text and one compact sentence',usage);
+    if([copy.headline,copy.summary,copy.shortSummary].some(text=>!text))return failAfterRequest('validation','Editorial copy requires clean nonempty source-backed text',usage);
     if([copy.headline,copy.summary,copy.shortSummary].some(text=>/[\x00-\x08\x0e-\x1f\x7f]/.test(text)))return failAfterRequest('validation','Editorial copy contains forbidden control characters',usage);
-    if(!singleSentence(copy.shortSummary))return failAfterRequest('validation','Short summary must contain exactly one complete sentence',usage,{phase:'output',code:'short_summary_sentence'},copy);
   }
   return copy;
 }

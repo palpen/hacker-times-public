@@ -245,12 +245,11 @@ test('bounds response size even without Content-Length and treats unreadable bod
   await failure(async () => new Response(stream), { kind: 'transient', requested: true, usage: null, accountingUncertain: true });
 });
 
-test('rejects wrong provenance, extra/missing fields, overlength copy, control text and multiple short-summary sentences', async () => {
+test('rejects wrong provenance, extra/missing fields, overlength copy and control text', async () => {
   const missingSummary = { ...copy };
   delete missingSummary.summary;
   const invalid = [missingSummary, null, [], 'Synthetic prose', { ...copy, headline: '' }, { ...copy, summary: '' },
     { ...copy, shortSummary: '' }, { ...copy, summary: 'Forbidden \u0000 control.' },
-    { ...copy, shortSummary: 'First fictional sentence. Another fictional sentence.' }, { ...copy, shortSummary: 'An incomplete fictional fragment' },
     { ...copy, headline: 'a'.repeat(241) }, { ...copy, summary: 'a'.repeat(901) }, { ...copy, shortSummary: 'a'.repeat(280) + '.' },
     { ...copy, summarySource: 'hn_post' }, { ...copy, summarySource: 'page_description' }, { ...copy, summarySource: 'invented' },
     { ...copy, headline: 3 }, { ...copy, shortSummary: null }];
@@ -340,12 +339,20 @@ test('normalizes model presentation whitespace without changing words or provena
 });
 
 
-test('middle initials are not sentence endings; genuine multiple sentences still fail',async()=>{
- const shortSummary='Lena Q. Finch describes a fictional system that sorts paper by color.';
- const draft={...copy,shortSummary};
- const result=await generateEditorialCopy(source,selected,config,provider(envelope(draft)));
- assert.equal(result.story.shortSummary,shortSummary);
- const reviewed=reviewEditorialDraft(source,selected,draft);assert.equal(reviewed.requested,false);assert.deepEqual(reviewed.usage,{inputTokens:0,outputTokens:0,totalTokens:0});assert.equal(reviewed.story.shortSummary,shortSummary);
- await failure(provider(envelope({...copy,shortSummary:shortSummary+' A second sentence follows.'})),{kind:'validation'});
- await failure(provider(envelope({...copy,shortSummary:'The fictional system sorts paper. Another sentence follows.'})),{kind:'validation'});
+test('sentence count and terminal punctuation do not block bounded source-backed summaries or retained drafts',async()=>{
+ for(const shortSummary of [
+  'Lena Q. Finch describes a fictional system that sorts paper by color.',
+  'The fictional system sorts paper. Another sentence follows.',
+  'A fictional system sorts paper without terminal punctuation',
+  'A fictional system sorts paper. It uses color',
+  'a'.repeat(280),
+ ]){
+  const draft={...copy,shortSummary};
+  const result=await generateEditorialCopy(source,selected,config,provider(envelope(draft)));
+  assert.equal(result.story.shortSummary,shortSummary);
+  const reviewed=reviewEditorialDraft(source,selected,draft);assert.equal(reviewed.requested,false);assert.deepEqual(reviewed.usage,{inputTokens:0,outputTokens:0,totalTokens:0});assert.equal(reviewed.story.shortSummary,shortSummary);
+ }
+ for(const draft of [{...copy,shortSummary:'a'.repeat(281)},{...copy,summarySource:'hn_post'}]){
+  assert.throws(()=>reviewEditorialDraft(source,selected,draft),/strict schema/);
+ }
 });
