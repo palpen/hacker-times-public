@@ -112,3 +112,43 @@ custom-domain attachment and public access until the registry changes, the zone
 activates, and apex HTTPS demonstrably serves the Cloudflare edition. Then
 remove the old Sites domain attachment and restrict that site to owner access.
 The registrar and email records do not need further changes.
+
+
+### Publisher outage recovery — November 14, 2026 UTC
+
+The zone activated November 13 at 05:10:26 UTC. By the November 14 check,
+`hackertimes.ca`, `www.hackertimes.ca`, and the workers.dev address all served
+the same Cloudflare publication. The live domain was no longer on Sites.
+
+The configured half-hour cron continued firing, but the November 13 07:00 UTC
+edition stalled with 70 of 71 stories staged. Fetching the selected NPR vehicle
+price article (HN 50478622) from Cloudflare returned HTTP 520. The source collector
+turned publisher 5xx/transport failures into retryable errors, and the runner
+kept the same pending edition indefinitely. A live November 14 00:00 UTC cron
+confirmed one attempted, one blocked, one remaining. This was a publication
+failure, not DNS propagation, browser caching, model spending, or a stopped cron.
+
+Publisher fetch failures now follow the existing unavailable-source policy:
+retain the selected original title and link, use empty summaries, and display
+"Summary unavailable." Each fresh edition fetches its sources again. HN metadata
+collection and identity validation, complete-edition checks, model accounting,
+and safety holds remain enforced. No story is dropped from its edition.
+
+The regression covers HTTP 500/502/503/504/520 and transport exceptions through
+complete publication. All 124 tests, TypeScript, production lint, and staging
+configuration validation passed. Code commit: `4c19125`. Deployed Worker version:
+`a1b3da9e-61f1-447e-9056-cc49f3b91e6e`.
+
+Resuming the existing private alarm workflow published the stalled edition at
+00:01:18 UTC as `e-3be8a61de4afa52b09c0d384`, then a fresh collection was started.
+
+
+Fresh collection then exposed history-query timeouts. Two individual Algolia
+queries succeeded in about five seconds each, while the original 13 concurrent
+queries timed out twice. Workers permits six simultaneous connections awaiting
+headers; all 13 request timers started before queued fetches could run. History
+queries now run in batches of four, preserving all queries, their ordering, and
+strict response validation. A batch is fully settled before propagating a failure.
+The bounded live collection succeeded and pinned a fresh 73-story snapshot at
+`2026-11-14T00:03:19.317Z`. A regression verifies the concurrency bound and that
+all 13 queries and their order are preserved.

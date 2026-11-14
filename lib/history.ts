@@ -80,7 +80,12 @@ function safeIndexUrl(url:string){try{return new URL(url).href;}catch{return 'ht
 
 export async function discoverHistory(atMs:number,currentIds:readonly number[]){
  const window=monthWindow(atMs),queries=historyQueries(atMs);
- const responses=await Promise.all(queries.map(async plan=>{
+ // Start each deadline only when its request can run. Workers queues requests
+ // beyond six pending connections; starting all 13 timers together made slow
+ // searches expire in that queue. Four at a time leaves connection headroom.
+ const responses:HistoryHit[][]=[];
+ for(let offset=0;offset<queries.length;offset+=4){
+ const batch=await Promise.allSettled(queries.slice(offset,offset+4).map(async plan=>{
   let response:Response|undefined;
   try{
    response=await fetch(plan.url,{redirect:'manual',headers:{accept:'application/json'},signal:AbortSignal.timeout(historyLimits.requestTimeoutMs)});
@@ -90,6 +95,10 @@ export async function discoverHistory(atMs:number,currentIds:readonly number[]){
   }catch(error){throw collectionFailure(error,'history','Historical HN discovery failed or exceeded a response limit; keep the previous edition.');}
   finally{void response?.body?.cancel().catch(()=>{});}
  }));
+ const failed=batch.find(result=>result.status==='rejected');
+ if(failed?.status==='rejected')throw failed.reason;
+ for(const result of batch)if(result.status==='fulfilled')responses.push(result.value);
+ }
  const hits=responses.flat(),discoveredCount=new Set(hits.map(s=>s.id)).size;
  const shortlisted=shortlistHistorical(hits,currentIds,atMs);
  return {windowStart:window.windowStart,windowEnd:window.windowEnd,shortlisted,discovery:{provider:'hn-algolia',coverage:'sampled',windowDays:monthPolicyConfig.windowDays,requestCount:queries.length,discoveredCount,shortlistedCount:shortlisted.length,queries:queries.map((q,i)=>({kind:q.kind,query:q.query,endpoint:q.endpoint,hitCount:responses[i].length})),limits:{...historyLimits}}};
