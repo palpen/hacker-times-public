@@ -6,6 +6,7 @@ import {createCommentsService} from '../lib/comments-core';
 import type {ProductionEnv,Publication} from '../lib/production/types';
 import {observeRun} from '../lib/production/run-log';
 import {call,enabled,collect,runEdition} from '../lib/production/runner';
+import type {ImageAsset} from '../lib/production/images';
 export {Newsroom} from '../lib/production/newsroom';
 const comments=createCommentsService({readEdition:async(_req,bindings,date,version)=>{
  try{const p=await call(bindings as unknown as ProductionEnv,'edition',{...(date?{date}:{}),...(version?{version}:{})}) as Publication;return ((!version||version===p.version)&&(!date||date===p.edition.editionDate))?p.edition:null;}catch{return null;}
@@ -20,6 +21,11 @@ const worker={
    if(decodedPath==='/admin'||decodedPath.startsWith('/admin/'))return secureResponse(new Response(request.method==='HEAD'?null:'Not found',{status:404,headers:{'Cache-Control':'no-store'}}));
     if(!['GET','HEAD'].includes(request.method))throw new RequestError('Method not allowed',405);
     if(path==='/healthz')response=Response.json({mode:'production',publicationEnabled:env.PUBLICATION_ENABLED==='true',scheduleEnabled:env.SCHEDULE_ENABLED==='true'});
+    else if(/^\/images\/[a-f0-9]{64}$/.test(path)){
+     const hash=path.slice('/images/'.length),asset=await call(env,'image',{hash}) as ImageAsset;
+     const headers={'Content-Type':asset.mime,'Cache-Control':'public, max-age=31536000, immutable',ETag:'"'+hash+'"'};
+     response=request.headers.get('if-none-match')===headers.ETag?new Response(null,{status:304,headers}):new Response(Uint8Array.from(atob(asset.base64),x=>x.charCodeAt(0)),{headers});
+    }
     else if(path==='/api/archive')response=Response.json(await call(env,'archive'));
     else if(path==='/'||path==='/api/edition'){
      const date=url.searchParams.get('date');if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new RequestError('Invalid date');

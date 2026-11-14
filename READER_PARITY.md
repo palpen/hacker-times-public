@@ -2,7 +2,7 @@
 
 Reviewed November 14, 2026 UTC. This is a comparison of the running readers and their source, not a claim that different news snapshots should contain identical articles.
 
-The requested first phase is reader parity. Automated image review and a protected publishing dashboard are deferred at the owner's request. This branch changes repository code only; publication of the new code and a successful subsequent edition are separate release steps.
+The initial reader-parity release is deployed. The owner subsequently authorized automated image review with caching and a shared US$5 monthly AI limit. The protected publishing dashboard remains deferred.
 
 ## Compared versions and evidence
 
@@ -26,7 +26,7 @@ The requested first phase is reader parity. Automated image review and a protect
 | Highlight failures | A thread with an unread candidate must not masquerade as a complete review. | Keep explicit partial/unavailable status. Never substitute invented or old quotes. An empty result omits the panel, matching Sites behavior. |
 | Summary length / vertical density | The inspected Sites summaries had a median of 155 characters; Cloudflare's had a median of 469.5. The editions differ, but the longer decks visibly change layout density. | Automatic publication uses its already-authored one-sentence `shortSummary` as the newspaper deck, including cached model results. No truncation, additional model call or archive rewrite. |
 | Publisher bylines | Cloudflare discarded available `og:site_name` and always displayed a hostname. | Preserve bounded publisher metadata in the pinned source; use it even when reusing model copy. HN self-posts use Hacker News. A hostname remains the fallback when metadata is absent. Human-written publisher labels can still differ from metadata. |
-| Article images | Sites can include visually reviewed, relevant publisher images. Cloudflare explicitly rejects images during staging. | Deferred: requires a bounded automated image-review pipeline. Existing archived image rendering, alt text, captions and credits remain supported. No unreviewed images are added. |
+| Article images | Sites includes visually reviewed publisher images. | Cloudflare now pins publisher image candidates, reviews actual bounded raster bytes against article evidence, and caches approvals and rejections. Approved immutable bytes use the existing photo layout, alt text and publisher credit. Optional failures omit the image. |
 | Layout and typography | Masthead, headings, rules, columns, Technology grid, story metadata and responsive CSS are the same. | Preserved; verified with same-data renderer comparison and browser checks. |
 | Sections and search | Same topic collections, filter code, search scope, empty states, query/date parameters and history handlers. | Preserved. Counts differ when selected stories differ; this is not missing section functionality. |
 | Native comments | Both use the same sanitized comment-token protocol and UI. Cloudflare's adapter reads its own immutable publication records. | Verified live loading. Existing tests cover replies, pagination, deleted/dead items, failures, membership and immutable version pinning. No voting or posting is introduced. |
@@ -62,3 +62,15 @@ A failure to read comments is optional content failure, not an editorial safety 
 - Same-data renderer comparison and browser desktop/mobile/light/dark/carousel checks passed.
 - Production release is not part of these local checks. After deploying this branch, verify a newly completed edition contains the expected frozen highlights, exact HTML/API version agreement, concise decks and publisher metadata. A code deployment alone cannot add highlights to already stored editions; they arrive with a successful subsequent publication. A previously staged article can retain its prior deck until a fresh source batch is authored.
 - Live publisher availability, image review, protected administration, cross-installation lead-history continuity and every physical device are outside this first phase. These are explicit remaining differences, not claimed passes.
+
+## Automated publisher images
+
+The scheduled publisher finishes required text first, then reviews one eligible image per alarm checkpoint before collecting discussions and publishing. Only the pinned article's Open Graph/Twitter image is considered. Downloads validate each public redirect, MIME signature, a 600 KB byte limit and bounded dimensions; SVG, GIF, animated WebP/PNG, tiny images and extreme aspect ratios are omitted.
+
+GPT-6 Luna receives the actual image at low detail and bounded article evidence, returning only an approval and descriptive alt text. It rejects unrelated imagery, logos, advertisements, generic share/title cards, low-quality and inappropriate images. The request uses Standard processing, no tools, no stored response and at most 512 output tokens. Ordinary rejection, provider refusal, fetch failure, unknown accounting or an exhausted image budget omits the photo; existing text safety holds remain enforced.
+
+The review key includes policy, model, article URL/evidence, candidate URL and the SHA-256 of downloaded bytes. Unchanged pairs reuse positive or negative decisions across editions. A changed file at the same URL requires review. Uncertain model requests retain their conservative reservation and are never replayed. Text and image requests use the same daily/monthly ledger, with server-enforced ceilings of US$1/day and US$5/month; configured lower limits remain effective.
+
+Approved bytes are stored in the existing namespace and served at a hash-addressed image route only after an edition publishes them. This prevents an upstream image replacement from changing a reviewed photo. Public assets use immutable browser caching and ETags, and remain available to archived editions. The reader retains its existing photo sizing, loading priorities, alt text and credit rendering.
+
+Validation: 136 tests passed, including shared accounting, cache reuse across editions, changed-image rejection, unpublished-image denial, immutable delivery/ETags, budget exhaustion and unknown-call protection. TypeScript, production lint and the scheduled Worker dry run passed. Live release evidence is recorded separately after deployment.

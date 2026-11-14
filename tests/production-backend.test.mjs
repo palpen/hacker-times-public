@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';import {build} from 'esbuild';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-production-'));
 const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
-fs.writeFileSync(entry,`export {importArchive} from '${process.cwd()}/lib/production/archive-import';export {readBlob,writeBlob} from '${process.cwd()}/lib/production/storage';export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {EDITORIAL_REQUEST_POLICY} from '${process.cwd()}/lib/production/editorial-model';export {summarize,runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
+fs.writeFileSync(entry,`export {processImage} from '${process.cwd()}/lib/production/image-runner';export {imageReviewKey,imageUrl,hashImage,encodeImage,IMAGE_POLICY} from '${process.cwd()}/lib/production/images';export {importArchive} from '${process.cwd()}/lib/production/archive-import';export {readBlob,writeBlob} from '${process.cwd()}/lib/production/storage';export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {EDITORIAL_REQUEST_POLICY} from '${process.cwd()}/lib/production/editorial-model';export {summarize,runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
 const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true});
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>x.endsWith('lib/production/auth.ts')),'removed auth module must not enter production bundle');
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>/data\/|lib\/(publication|editor|editorial-staging|lead-state)\.ts/.test(x)),'independent backend must not bundle old data/managed writer');
@@ -19,10 +19,11 @@ class MemoryStorage {
  async delete(k){return this.data.delete(k);}
  async transaction(fn){const run=this.tail.then(async()=>{const tx=new MemoryStorage();tx.data=structuredClone(this.data);tx.alarm=this.alarm;const result=await fn(tx);this.data=tx.data;this.alarm=tx.alarm;return result;});this.tail=run.catch(()=>{});return run;}
 }
+function imageFixture(marker=0){const b=new Uint8Array(45),d=new DataView(b.buffer);b.set([137,80,78,71,13,10,26,10]);d.setUint32(8,13);d.setUint32(12,0x49484452);d.setUint32(16,640);d.setUint32(20,360);b[32]=marker;d.setUint32(37,0x49454e44);return b;}
 async function setup(env){
  const storage=new MemoryStorage();let ready;const state={storage,blockConcurrencyWhile:fn=>ready=fn()};const newsroom=new api.Newsroom(state,env);await ready;
  const request=(op,args={})=>newsroom.fetch(new Request('https://internal/'+op,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}));
- const call=async(op,args={})=>{const r=await request(op,args),body=await r.json();if(!r.ok)throw Error(body.error);return body;};
+ const call=async(op,args={})=>{const r=await request(op,args),body=await r.json();if(!r.ok)throw Object.assign(Error(body.error),{status:r.status});return body;};
  return {storage,request,call,newsroom};
 }
 function pool(at,offset=0){return Array.from({length:25},(_,i)=>({id:101+offset+i,title:'Fictional system '+i,url:'https://fictional.example/article/'+(101+offset+i),score:300-i*4,comments:50-i,time:Math.floor(at/1000)-3600-i,hnPage:1,hnRank:i+1,category:['Technology','AI','Software','Science','Culture','Business','Games'][i%7],topics:['Technology'],discoverySource:'current',editorialScore:0}));}
@@ -31,8 +32,8 @@ function snapshot(root,at=Date.now()-120_000,items=pool(at)){
  const selected=api.selectUnifiedMonthlyStories(items,ids,root.ledger.active?.id,at,audit.leadId,ids);
  return api.pinSnapshot(root,{schemaVersion:1,selectionVersion:6,layoutVersion:3,freshnessPolicyVersion:1,algorithmVersion:3,policyVersion:api.unifiedSectionPolicyVersion,policyConfig:api.unifiedSectionPolicyConfig,generatedAt:new Date(at).toISOString(),windowStart:new Date(at-30*86400_000).toISOString(),windowEnd:new Date(at).toISOString(),sourceMode:'hn-month-sample',discovery:{coverage:'sampled'},frontPageIds:ids,sourcePages:[{url:'https://news.ycombinator.com/',ids},{url:'https://news.ycombinator.com/?p=2',ids:[]},{url:'https://news.ycombinator.com/?p=3',ids:[]}],candidateCount:items.length,fetchedCount:items.length,rankedStories:items,selectedStories:selected,ranking:'Fictional policy fixture'});
 }
-async function author(s,fixture,selected,extra={}){
- const source={id:selected.id,generatedAt:fixture.generatedAt,kind:'article',excerpt:'A wholly fictional test system demonstrates a synthetic operation.',description:'Fictional system demonstration.',url:selected.url,fetchedAt:new Date().toISOString(),status:'fetched'};
+async function author(s,fixture,selected,extra={},sourceExtra={}){
+ const source={id:selected.id,generatedAt:fixture.generatedAt,kind:'article',excerpt:'A wholly fictional test system demonstrates a synthetic operation.',description:'Fictional system demonstration.',url:selected.url,fetchedAt:new Date().toISOString(),status:'fetched',...sourceExtra};
  source.fingerprint=await api.digest(source);
  await s.call('source',{generatedAt:fixture.generatedAt,source});
  const story={...selected,headline:selected.title,summary:'A fictional system demonstrates a synthetic operation.',shortSummary:'A fictional system demonstrates a synthetic operation.',summarySource:'article',publisher:'Fictional publisher',articleStatus:'fetched',image:null,imageAlt:'',imageCredit:'',...extra};
@@ -519,4 +520,63 @@ test('pinned publisher metadata and authored compact decks survive model-cache r
  env.NEWSROOM={idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})};await api.summarize(env,{generatedAt:f.generatedAt,id:selected.id});
  const {story}=await s.storage.get('stage/'+f.generatedAt+'/'+selected.id);
  assert.equal(story.publisher,'The Fictional Gazette');assert.equal(story.summary,short);assert.equal(story.shortSummary,short);assert.deepEqual((await s.call('status')).modelBudget,before);
+});
+
+test('reviewed images publish immutable bytes, share text spending, and reuse cache across editions',async()=>{
+ const env={MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+ const s=await setup(env),old=globalThis.fetch;let requests=0,bytes=imageFixture(),approved=true;
+ env.NEWSROOM={idFromName:()=>0,get:()=>({fetch:async req=>s.request(new URL(req.url).pathname.slice(1),await req.json())})};
+ globalThis.fetch=async(url,options)=>{
+  if(url==='https://fictional.example/photo.png')return new Response(bytes,{headers:{'Content-Type':'image/png'}});
+  assert.equal(url,'https://api.openai.com/v1/responses');requests++;assert.equal(JSON.parse(options.body).input[0].content[1].detail,'low');
+  return Response.json({status:'completed',usage:{input_tokens:500,output_tokens:100,total_tokens:600},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({approved,alt:approved?'Colored trays in a fictional sorting machine.':''})}]}]});
+ };
+ const seed=async(offset)=>{
+  const f=snapshot(await s.call('root'),Date.now()-120_000+offset);await s.call('snapshot',{snapshot:f});
+  for(let i=0;i<f.selectedStories.length;i++)await s.call('stage',await author(s,f,f.selectedStories[i],{},i===0?{imageCandidate:'https://fictional.example/photo.png'}:{}));
+  return f;
+ };
+ try{
+  // A text reservation and image review must debit the very same ledger.
+  await s.call('model-reserve',{key:'f'.repeat(64),cost:500,dailyLimit:1_000_000,monthlyLimit:5_000_000});await s.call('model-complete',{key:'f'.repeat(64),actualCost:200,result:{synthetic:true}});
+  let f=await seed(0),plan=await s.call('image-next',{generatedAt:f.generatedAt});
+  const op=(path,args)=>s.call(path,args);await api.processImage(env,plan,op);assert.equal(requests,1);
+  const staged=await s.storage.get('stage/'+f.generatedAt+'/'+plan.id),hash=await api.hashImage(bytes);
+  assert.equal(staged.story.image,api.imageUrl(hash));assert.match(staged.story.imageAlt,/Colored trays/);assert.equal(staged.story.imageCredit,'Fictional publisher');
+  await assert.rejects(()=>s.call('image',{hash}),/not found/,'unpublished images must remain private');
+  assert.equal((await s.call('image-next',{generatedAt:f.generatedAt})).complete,true);
+  const spent=(await s.call('status')).modelBudget.monthlyReservedMicroUsd;assert.equal(spent,313);
+  await s.call('validate',{generatedAt:f.generatedAt});await s.call('publish',{generatedAt:f.generatedAt});
+  const image=await api.worker.fetch(new Request(api.imageUrl(hash)),env);assert.equal(image.status,200);assert.equal(image.headers.get('Content-Type'),'image/png');assert.match(image.headers.get('Cache-Control'),/immutable/);assert.deepEqual(new Uint8Array(await image.arrayBuffer()),bytes);
+  const cached=await api.worker.fetch(new Request(api.imageUrl(hash),{headers:{'If-None-Match':'"'+hash+'"'}}),env);assert.equal(cached.status,304);
+  // Same article/image pair in a subsequent snapshot reuses approval and spending.
+  f=await seed(1000);plan=await s.call('image-next',{generatedAt:f.generatedAt});await api.processImage(env,plan,op);assert.equal(requests,1);assert.equal((await s.call('status')).modelBudget.monthlyReservedMicroUsd,spent);
+  await s.call('validate',{generatedAt:f.generatedAt});await s.call('publish',{generatedAt:f.generatedAt});
+  // Changed bytes at the same URL require a new review; rejections are cached too.
+  bytes=imageFixture(1);approved=false;f=await seed(2000);plan=await s.call('image-next',{generatedAt:f.generatedAt});await api.processImage(env,plan,op);assert.equal(requests,2);await api.processImage(env,plan,op);assert.equal(requests,2);
+  assert.equal((await s.storage.get('stage/'+f.generatedAt+'/'+plan.id)).story.image,null);
+  await s.call('validate',{generatedAt:f.generatedAt});assert.equal((await s.call('publish',{generatedAt:f.generatedAt})).published,true);
+  assert.equal((await api.worker.fetch(new Request(api.imageUrl(hash)),env)).status,200,'old published bytes remain available');
+ }finally{globalThis.fetch=old;}
+});
+
+test('image review cannot bypass the total cap or retry an uncertain request, and cannot forge approval',async()=>{
+ for(const mode of ['budget','uncertain','refusal']){
+  const env={MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+  const s=await setup(env),f=snapshot(await s.call('root')),old=globalThis.fetch,bytes=imageFixture();let requests=0;await s.call('snapshot',{snapshot:f});
+  for(let i=0;i<f.selectedStories.length;i++)await s.call('stage',await author(s,f,f.selectedStories[i],{},i===0?{imageCandidate:'https://fictional.example/photo.png'}:{}));
+  const plan=await s.call('image-next',{generatedAt:f.generatedAt}),key=await api.imageReviewKey(plan.source,env.EDITORIAL_MODEL,await api.hashImage(bytes));
+  await assert.rejects(async()=>s.call('image-done',{generatedAt:f.generatedAt,id:plan.id,key,asset:{hash:await api.hashImage(bytes),base64:api.encodeImage(bytes),mime:'image/png',width:640,height:360}}),/Approved visual/);
+  await assert.rejects(()=>s.call('model-reserve',{key:'b'.repeat(64),cost:10,dailyLimit:1_000_000,monthlyLimit:5_000_001}),/total cap/);
+  if(mode==='budget')await s.storage.put('budget/month/'+new Date().toISOString().slice(0,7),4_999_999);
+  if(mode==='uncertain')await s.call('model-reserve',{key,cost:9000,dailyLimit:1_000_000,monthlyLimit:5_000_000});
+  globalThis.fetch=async(url)=>{if(url==='https://fictional.example/photo.png')return new Response(bytes,{headers:{'Content-Type':'image/png'}});requests++;return Response.json({status:'completed',usage:{input_tokens:500,output_tokens:100,total_tokens:600},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'refusal',refusal:'Fictional refusal'}]}]});};
+  try{
+   await api.processImage(env,plan,(path,args)=>s.call(path,args));assert.equal(requests,mode==='refusal'?1:0);
+   assert.equal((await s.storage.get('stage/'+f.generatedAt+'/'+plan.id)).story.image,null);
+   assert.equal((await s.call('status')).safetyStop,null);
+   if(mode==='uncertain')assert.equal((await s.call('model-reserve',{key,cost:9000,dailyLimit:1_000_000,monthlyLimit:5_000_000})).created,undefined);
+   await s.call('validate',{generatedAt:f.generatedAt});assert.equal((await s.call('publish',{generatedAt:f.generatedAt})).published,true);
+  }finally{globalThis.fetch=old;}
+ }
 });

@@ -17,6 +17,8 @@ import {validDiscussionSnapshot,type DiscussionSnapshot} from '../discussion-hig
 import {discussionBatchCount,discussionBatchEdition,checkDiscussionBatch,combineDiscussionBatches} from './discussions';
 import type {Edition} from '../contracts';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
+import {publicFetchUrl} from '../reporting';
+import {imageHash,imageUrl,imageReviewKey,validImageAsset,cleanImageAlt,IMAGE_POLICY,type ImageAsset,type ImageResult} from './images';
 const empty=():Root=>({schema:1,revision:0,version:'empty',archives:{},ledger:{retiredIds:[],retiredKeys:[],observations:[]}});
 function stamp(value:unknown):string {
  if(typeof value!=='string'||!Number.isFinite(Date.parse(value))||new Date(value).toISOString()!==value)throw new RequestError('Exact source timestamp required');return value;
@@ -46,6 +48,11 @@ async function checkedEdition(store:Store,s:Snapshot,root:Root){
  const rebuilt=pinSnapshot(root,s);
  if(JSON.stringify(rebuilt.nextLedger)!==JSON.stringify(s.nextLedger)||!equivalent(rebuilt.leadAudit,s.leadAudit))throw new RequestError('Pinned lead plan invalid',409);
  const {records,missing}=await stageRecords(store,s);if(missing.length)throw new RequestError('Incomplete edition: '+missing.length+' selected articles missing',409);
+ for(const record of records)if(record.story.image){
+  const hash=imageHash(record.story.image),source=await store.get<Source>(sourceKey(s.generatedAt,record.story.id));
+  const review=record.imageReviewKey?await store.get<{state:string;result?:ImageResult}>('model/'+record.imageReviewKey):null;
+  if(!hash||!source||source.fingerprint!==record.sourceFingerprint||review?.state!=='completed'||review.result?.policy!==IMAGE_POLICY||review.result.hash!==hash||!review.result.approved||review.result.alt!==record.story.imageAlt||!await store.get('image-asset/'+hash+'/count'))throw new RequestError('Verified image evidence required',409);
+ }
  const prior=root.version==='empty'?null:await readBlob<Publication>(store,'version/'+root.version);
  if(root.version!=='empty'&&!prior)throw new RequestError('Current edition missing; recovery required',503);
  const edition=validateEdition({generatedAt:s.generatedAt,stories:records.map(r=>r.story)},prior?.edition,s,true);
@@ -109,7 +116,7 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch','/image-next','/image-done'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
     }
     if(path==='/collect-items'){
      hold(root);
@@ -130,10 +137,19 @@ export class Newsroom {
      const p=await readBlob<Publication>(tx,'version/'+version);if(!p)throw new RequestError('Published edition missing',503);return p;
     }
     if(path==='/archive')return {dates:Object.keys(root.archives).sort().reverse(),publicationVersion:root.version};
+    if(path==='/image'){
+     const hash=String(args.hash);
+     if(!/^[a-f0-9]{64}$/.test(hash)||!await tx.get('published-image/'+hash))throw new RequestError('Image not found',404);
+     const asset=await readBlob<ImageAsset>(tx,'image-asset/'+hash);if(!asset)throw new RequestError('Image missing',503);return asset;
+    }
     if(path==='/model-reserve'){
      hold(root);
      const key=String(args.key),cost=Number(args.cost),dailyLimit=Number(args.dailyLimit),monthlyLimit=Number(args.monthlyLimit);
      if(!/^[a-f0-9]{64}$/.test(key)||![cost,dailyLimit,monthlyLimit].every(x=>Number.isSafeInteger(x)&&x>0)||cost>dailyLimit||dailyLimit>monthlyLimit)throw new RequestError('Invalid approved model budget');
+     // Every text and image request shares these counters and hard server caps.
+     const approvedMonth=Math.min(5_000_000,Number(this.env?.MODEL_MONTHLY_LIMIT_MICRO_USD||5_000_000));
+     const approvedDay=Math.min(1_000_000,Number(this.env?.MODEL_DAILY_LIMIT_MICRO_USD||1_000_000));
+     if(!Number.isSafeInteger(approvedMonth)||!Number.isSafeInteger(approvedDay)||monthlyLimit>approvedMonth||dailyLimit>approvedDay)throw new RequestError('Model budget exceeds approved total cap',429);
      const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown}>('model/'+key);
      if(prior&&!(prior.state==='failed'&&prior.retryable&&(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS))return prior;
      const now=new Date().toISOString(),day=now.slice(0,10),month=now.slice(0,7),daily=await tx.get<number>('budget/day/'+day)??0,monthly=await tx.get<number>('budget/month/'+month)??0;
@@ -220,6 +236,32 @@ export class Newsroom {
     }
     await snapshotAt(tx,at,root);
     if(path==='/selection')return s;
+    if(path==='/image-next'){
+     hold(root);if(this.env?.MUTATIONS_ENABLED==='false')throw new RequestError('Image review is disabled',503);
+     const {records,missing}=await stageRecords(tx,s);if(missing.length)throw new RequestError('Finish required articles before images',409);
+     for(const record of records){
+      const source=await tx.get<Source>(sourceKey(at,record.story.id));
+      if(source?.kind==='article'&&source.imageCandidate&&(source.excerpt.trim()||source.description.trim())&&record.story.summarySource!=='unavailable'&&!await tx.get('image-done/'+at+'/'+record.story.id))return {complete:false,id:record.story.id,source};
+     }
+     return {complete:true};
+    }
+    if(path==='/image-done'){
+     hold(root);const id=Number(args.id),record=await tx.get<Staged>(stageKey(at,id)),source=await tx.get<Source>(sourceKey(at,id));
+     if(!s.selectedStories.some(row=>row.id===id)||!record||!source||source.fingerprint!==record.sourceFingerprint)throw new RequestError('Pinned image source required',409);
+     const checkpoint='image-done/'+at+'/'+id;if(await tx.get(checkpoint))return {unchanged:true};
+     if(args.asset||args.key){
+      if(source.kind!=='article'||!source.imageCandidate||record.story.summarySource==='unavailable')throw new RequestError('Article image evidence required',409);
+      const asset=await validImageAsset(args.asset);
+      if(!asset||args.key!==await imageReviewKey(source,this.env?.EDITORIAL_MODEL||'gpt-6-luna',asset.hash))throw new RequestError('Image review identity mismatch',409);
+      const review=await tx.get<{state:string;result?:ImageResult}>('model/'+args.key),result=review?.result;
+      if(review?.state!=='completed'||result?.policy!==IMAGE_POLICY||result.hash!==asset.hash||!result.approved||!cleanImageAlt(result.alt))throw new RequestError('Approved visual verification required',409);
+      const assetKey='image-asset/'+asset.hash;
+      if(!await tx.get(assetKey+'/count'))await writeBlob(tx,assetKey,asset);
+      await tx.put(stageKey(at,id),{...record,revision:record.revision+1,imageReviewKey:args.key,story:{...record.story,image:imageUrl(asset.hash),imageAlt:result.alt,imageCredit:record.story.publisher}});
+      await tx.delete('validation/'+at);
+     }
+     await tx.put(checkpoint,true);return {saved:true};
+    }
     if(path==='/prepare-discussions'||path==='/save-discussion-batch'){
      if(this.env?.LIVE_FETCH_ENABLED!=='true'||this.env?.MUTATIONS_ENABLED!=='true')throw new RequestError('Discussion collection is disabled',503);
      const edition=await checkedEdition(tx,s,root);
@@ -245,6 +287,7 @@ export class Newsroom {
     if(path==='/source'){
      const source=args.source as Source;
      if(source?.publisher!==undefined&&(typeof source.publisher!=='string'||source.publisher.length>240||/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)))throw new RequestError('Invalid source publisher');
+     if(source?.imageCandidate!==undefined&&(source.kind!=='article'||!publicFetchUrl(source.imageCandidate)))throw new RequestError('Invalid publisher image candidate');
      if(!source||source.generatedAt!==at||!s.selectedStories.some(x=>x.id===source.id&&x.url===source.url)||!['article','hn_post','unavailable'].includes(source.kind)||source.excerpt.length>8500||source.description.length>700||source.fingerprint!==await digest({...source,fingerprint:undefined}))throw new RequestError('Invalid source record');
      const key=sourceKey(at,source.id),existing=await tx.get<Source>(key);
      if(existing&&existing.fingerprint!==source.fingerprint)throw new RequestError('Source already saved; use existing verified work',409);
@@ -276,6 +319,7 @@ export class Newsroom {
      const version='e-'+(await digest({edition,ledger:s.nextLedger,html:renderEdition(edition,'version-placeholder')})).slice(0,24);
      const publication:Publication={version,edition,html:renderEdition(edition,version)};
      await writeBlob(tx,'version/'+version,publication);
+     for(const story of edition.stories)if(story.image)await tx.put('published-image/'+imageHash(story.image),true);
      const archives=Object.fromEntries(Object.entries({...root.archives,[edition.editionDate!]:version}).sort(([a],[b])=>b.localeCompare(a)).slice(0,31));
      const next:Root={...root,revision:root.revision+1,version,generatedAt:at,previous:root.version==='empty'?undefined:root.version,archives,ledger:s.nextLedger};
      await writeBlob(tx,'root',next);await tx.delete('pending');await tx.deleteAlarm();

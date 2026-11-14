@@ -274,8 +274,19 @@ export async function generateEditorialCopy(
       },
     } },
   };
+  const {text,usage}=await requestStructuredModel(request,config,fetcher);
+  let copy: unknown;
+  try { copy = JSON.parse(text); } catch {
+    return failAfterRequest('validation', 'Editorial copy is not valid JSON', usage);
+  }
+  return { story: makeStory(source, selected, publisher, validateCopy(copy, provenance, selected.title, usage)), usage, requested: true };
+}
+
+/** Shared bounded transport and accounting checks for text and visual review. */
+export async function requestStructuredModel(request:object,config:EditorialModelConfig,fetcher:typeof fetch=fetch,maxRequestBytes=MAX_REQUEST_BYTES):Promise<{text:string;usage:ModelUsage}>{
+  if(!config?.apiKey||config.apiKey.length>512||/\s/.test(config.apiKey)||!config.model||config.model.length>100||!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(config.model)||!Number.isSafeInteger(config.maxOutputTokens)||config.maxOutputTokens<1||config.maxOutputTokens>MAX_MODEL_OUTPUT_TOKENS)return preflight('Explicit bounded model configuration required');
   const encoded = JSON.stringify(request);
-  if (new TextEncoder().encode(encoded).byteLength > MAX_REQUEST_BYTES) return preflight('Editorial request exceeds its reserved input bound');
+  if (new TextEncoder().encode(encoded).byteLength > maxRequestBytes) return preflight('Editorial request exceeds its reserved input bound');
 
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -314,10 +325,5 @@ export async function generateEditorialCopy(
   if (!usage || (body.status === 'completed' && usage.outputTokens === 0)) {
     return failAfterRequest('validation', 'Missing or invalid model usage; accounting is uncertain', null, {phase:'usage',httpStatus:response.status});
   }
-  let copy: unknown;
-  try { copy = JSON.parse(outputText(body, usage)); } catch (error) {
-    if (error instanceof EditorialModelError) throw error;
-    return failAfterRequest('validation', 'Editorial copy is not valid JSON', usage);
-  }
-  return { story: makeStory(source, selected, publisher, validateCopy(copy, provenance, selected.title, usage)), usage, requested: true };
+  return {text:outputText(body,usage),usage};
 }
