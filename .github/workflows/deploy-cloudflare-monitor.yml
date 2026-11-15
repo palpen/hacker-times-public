@@ -1,0 +1,58 @@
+name: Deploy Cloudflare monitor
+on:
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: Send clearly labeled failure and recovery test emails
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-hacker-times-monitor
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/migration/cloudflare-owned'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --workspaces=false --include=dev --include=optional --no-audit --no-fund
+      - run: node --test tests/monitor.test.mjs
+      - run: node node_modules/typescript/bin/tsc --noEmit --incremental false
+      - run: node node_modules/eslint/bin/eslint.js lib/monitor worker/monitor.ts scripts/deploy-monitor.mjs scripts/verify-monitor.mjs scripts/monitor-diagnostic-worker.ts tests/monitor.test.mjs
+      - run: node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.monitor.jsonc --outdir dist/cloudflare-monitor
+  deploy:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: cloudflare-staging
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --workspaces=false --include=dev --include=optional --no-audit --no-fund
+      - name: Deploy isolated monitor with verified-recipient binding
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
+          MONITOR_ALERT_TO: ${{ secrets.MONITOR_ALERT_TO }}
+        run: node scripts/deploy-monitor.mjs
+      - name: Verify live checks and optionally test email delivery
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
+          MONITOR_ALERT_TO: ${{ secrets.MONITOR_ALERT_TO }}
+          MONITOR_TEST_EMAIL: ${{ inputs.test_email }}
+        run: node scripts/verify-monitor.mjs
