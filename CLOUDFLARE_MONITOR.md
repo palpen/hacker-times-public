@@ -36,7 +36,9 @@ General Email Sending to arbitrary recipients is a different, paid feature.
    GitHub `cloudflare-staging` environment. It is omitted from public source.
 4. Run **Deploy Cloudflare monitor** from `migration/cloudflare-owned`.
    The workflow validates in one runner and deploys in a fresh runner using the
-   existing scoped credential. It creates only the monitor Worker and its own
+   configured deployment credential. That credential must include access to
+   `hacker-times-monitor`; a token scoped only to `hacker-times-production`
+   cannot deploy this Worker. It creates only the monitor Worker and its own
    storage. The generated email binding is restricted to the verified recipient.
 5. Enable the optional `test_email` input for setup verification. An authenticated,
    temporary Wrangler preview reads monitor state, runs a live check, and sends
@@ -63,3 +65,19 @@ References:
 
 This runbook describes the implementation. Deployment, sender setup, cron
 execution, and actual email receipt must each be verified separately.
+
+## Verified deployment (November 14, 2026)
+
+The monitor was deployed using Wrangler OAuth with `account:read` and
+`workers_scripts:write`. The similarly named `workers:write` scope did not
+authorize script deployment. Email Routing is enabled for `hackertimes.ca`,
+with `alerts@hackertimes.ca` as the sender and a verified private recipient.
+Both labeled test messages were confirmed received in the destination mailbox.
+
+The existing GitHub deployment token is scoped to the production Worker only.
+The monitor is running independently of GitHub Actions; future workflow deploys
+require a credential that also covers the monitor. Do not broaden the token
+without owner approval. Local deployments can use the authorized Wrangler login
+and a temporary copy of the monitor configuration with an absolute `main`,
+`vars.ALERT_TO`, and `send_email[0].destination_address` set to the verified
+recipient. Keep that generated configuration outside the repository.
