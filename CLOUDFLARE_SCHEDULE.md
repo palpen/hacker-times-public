@@ -51,6 +51,21 @@ six live flags and removes cron. Do not roll back or delete the Durable Object.
 Both configurations preserve the apex and www custom-domain routes so a pause
 does not alter the reader's domain binding.
 
+## Stored Worker logs
+
+Both deployment configurations enable Cloudflare Workers Logs with 100% head
+sampling. Invocation logs and the publisher's existing structured background-run
+logs are persisted in the Cloudflare dashboard under this Worker's Observability
+tab. The deployment validator requires this setting so normal releases and
+publisher pauses retain logging. Historical events from before logging was
+enabled are not backfilled.
+
+As of November 14, 2026, the Workers Free plan includes 200,000 log events per day
+with three-day retention. Cloudflare has announced a pricing change for December
+1, 2026; check the [current Workers Logs documentation](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
+for the applicable limits. Stored logs alone do not configure uptime or edition
+freshness alerts.
+
 ## Cutover gate
 
 On November 12, 2026 UTC, an initial metadata-only selection failed the old
