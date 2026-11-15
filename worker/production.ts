@@ -2,6 +2,7 @@ import {assetResponse} from '../lib/asset-response';
 import {secureResponse,RequestError} from '../lib/security';
 import {withSubmissionAges} from '../lib/submission-age-document';
 import {withFooterTimestamp} from '../lib/footer-timestamp';
+import {withSectionHeadingLinks} from '../lib/section-heading-document';
 import {createCommentsService} from '../lib/comments-core';
 import type {ProductionEnv,Publication} from '../lib/production/types';
 import {observeRun} from '../lib/production/run-log';
@@ -32,7 +33,7 @@ const worker={
     else if(path==='/'||path==='/api/edition'){
      const date=url.searchParams.get('date');if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new RequestError('Invalid date');
      const p=await call(env,'edition',date?{date}:{}) as Publication;
-     response=path==='/'?new Response(withFooterTimestamp(withSubmissionAges(p.html,p.edition)),{headers:{'Content-Type':'text/html; charset=utf-8'}}):Response.json({...p.edition,publicationVersion:p.version,persisted:true});
+     response=path==='/'?new Response(withSectionHeadingLinks(withFooterTimestamp(withSubmissionAges(p.html,p.edition))),{headers:{'Content-Type':'text/html; charset=utf-8'}}):Response.json({...p.edition,publicationVersion:p.version,persisted:true});
      response.headers.set('X-Edition-Version',p.version);response.headers.set('Cache-Control','no-store');
     }else if(path==='/api/comments'){
      enabled(env.LIVE_FETCH_ENABLED,'Live comments');
