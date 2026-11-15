@@ -6,18 +6,23 @@ import {RequestError} from '../security';
 import type {Root,Ledger,Snapshot} from './types';
 export function chooseLead(root:Root,pool:Candidate[],frontPageIds:number[],at:number) {
   const ledger=root.ledger, active=ledger.active;
-  if(active){const same=pool.find(s=>s.id===active.id);if(same&&normalizeArticleUrl(same.url)!==active.key)throw new RequestError('Current lead identity changed; review required',409);}
   const keys=new Map(pool.map(s=>[s.id,normalizeArticleUrl(s.url)]));
-  const aliases=active?frontPageIds.filter(id=>keys.get(id)===active.key):[];
+  // HN can edit the destination of an existing submission. Pin and author the
+  // new URL normally, retaining submission identity but retiring the old URL.
+  // Do this before selection so an old-link repost cannot become the lead.
+  const incumbentKey=active?(keys.get(active.id)??active.key):undefined;
+  const corrected=!!active&&incumbentKey!==active.key;
+  const retiredIds=[...ledger.retiredIds], retiredKeys=[...ledger.retiredKeys,...(corrected?[active!.key]:[])];
+  const aliases=active?frontPageIds.filter(id=>keys.get(id)===incumbentKey):[];
   const incumbentId=active?(aliases.includes(active.id)?active.id:aliases[0]??active.id):undefined;
-  const audit=selectBalancedLead({candidates:pool,frontPageIds,at,incumbentId,observations:ledger.observations,retiredIds:new Set(ledger.retiredIds),retiredKeys:new Set(ledger.retiredKeys),candidateKeys:keys,suppressedIds:new Set(aliases.filter(id=>id!==incumbentId))},currentLeadScoringVersion);
+  const audit=selectBalancedLead({candidates:pool,frontPageIds,at,incumbentId,observations:ledger.observations,retiredIds:new Set(retiredIds),retiredKeys:new Set(retiredKeys),candidateKeys:keys,suppressedIds:new Set(aliases.filter(id=>id!==incumbentId))},currentLeadScoringVersion);
   if(audit.status!=='selected')throw new RequestError('No eligible front-page lead; preserve the entire prior edition and timestamp',409);
   const lead=pool.find(s=>s.id===audit.leadId)!;
   const key=keys.get(lead.id)!;
-  const retiredIds=[...ledger.retiredIds], retiredKeys=[...ledger.retiredKeys];
-  if(active&&active.key!==key){retiredIds.push(...active.aliases);retiredKeys.push(active.key);}
+  const continuing=!!active&&incumbentKey===key;
+  if(active&&!continuing){retiredIds.push(...active.aliases);retiredKeys.push(active.key);if(corrected)retiredKeys.push(incumbentKey!);}
   const observations=[...ledger.observations.filter(x=>at-x.observedAt<=150*60_000&&x.observedAt<at),...pool.map(s=>({id:s.id,score:s.score,comments:s.comments,observedAt:at}))];
-  const nextLedger:Ledger={active:{id:lead.id,url:lead.url,key,aliases:active?.key===key?[...new Set([...active.aliases,lead.id])]:[lead.id]},retiredIds:[...new Set(retiredIds)],retiredKeys:[...new Set(retiredKeys)],observations};
+  const nextLedger:Ledger={active:{id:lead.id,url:lead.url,key,aliases:continuing?[...new Set([...active!.aliases,lead.id])]:[lead.id]},retiredIds:[...new Set(retiredIds)],retiredKeys:[...new Set(retiredKeys)],observations};
   if(nextLedger.retiredIds.length>20_000||nextLedger.retiredKeys.length>20_000||observations.length>20_000)throw new RequestError('Lead ledger capacity reached; maintenance required without resetting history',409);
   return {audit,nextLedger};
 }

@@ -278,6 +278,15 @@ regression cover this path.
 
 ## Output and publisher recovery
 
+HN can change the destination URL of an existing lead submission. Collection
+uses the newly fetched official URL and authors its source again. The former
+URL is retired before lead selection; the submission ID remains active if it
+still wins, and is retired normally when replaced. A correction to an already
+retired URL remains ineligible. Historic editions retain their original links.
+Headline preservation applies only while the normalized source URL is unchanged.
+This prevents an upstream link edit from blocking every later collection or
+carrying old source copy onto a different destination.
+
 Current request identity is `editorial-v3-normalized-copy`. Single-line formatting
 is requested explicitly; validated copy normalizes whitespace without changing
 words. Schema, provenance, character limits and the one-sentence short summary

@@ -145,6 +145,47 @@ test('future editions preserve incumbent headline and retire replaced article/re
  const items=pool(at+90_000,200);items[0]={...items[0],url:one.selectedStories[0].url,score:10000,comments:10000};
  const four=snapshot(root,at+90_000,items);assert.notEqual(four.selectedStories[0].id,items[0].id);
 });
+test('HN edits to the active lead URL publish fresh evidence and retire every former URL',async()=>{
+ const s=await setup(),at=Date.now()-240_000,items=pool(at),originalUrl=items[0].url;
+ async function publish(f,unavailable=false){await s.call('snapshot',{snapshot:f});for(const row of f.selectedStories)await s.call('stage',await author(s,f,row,unavailable&&row.placement==='lead'?{summarySource:'unavailable',summary:'',shortSummary:''}:{}));await s.call('validate',{generatedAt:f.generatedAt});return s.call('publish',{generatedAt:f.generatedAt});}
+ const first=snapshot(await s.call('root'),at,items);await publish(first);
+ const originalVersion=(await s.call('edition')).version;
+ for(const [index,url] of ['https://corrected.example/launch','https://corrected.example/launch-final'].entries()){
+  const root=await s.call('root'),before=structuredClone(root);
+  items[0]={...items[0],url,title:'Corrected fictional title '+index};
+  // Even a high-scoring repost of the prior URL must not undo the correction.
+  const corrected=[...items,{...items[0],id:999+index,url:root.ledger.active.url,score:100000,comments:100000}];
+  const next=snapshot(root,at+(index+1)*30_000,corrected);
+  assert.deepEqual(root,before,'collection must not mutate the published ledger');
+  assert.equal(next.selectedStories[0].id,items[0].id);
+  await publish(next,true);
+  const saved=await s.call('edition'),updated=await s.call('root');
+  assert.equal(saved.edition.stories[0].url,url);assert.equal(saved.edition.generatedAt,next.generatedAt);
+  assert.equal(saved.edition.stories[0].headline,items[0].title);
+  assert.equal(saved.edition.stories[0].summarySource,'unavailable');
+  assert.ok(updated.ledger.retiredKeys.includes(root.ledger.active.key));
+  assert.ok(!updated.ledger.retiredIds.includes(items[0].id));
+  assert.equal((await s.call('edition',{version:originalVersion})).edition.stories[0].url,originalUrl);
+ }
+ await publish(snapshot(await s.call('root'),at+90_000,pool(at+90_000,100)));
+ const root=await s.call('root');assert.ok(root.ledger.retiredIds.includes(items[0].id));
+ for(const url of [originalUrl,'https://corrected.example/launch','https://corrected.example/launch-final']){
+  assert.ok(root.ledger.retiredKeys.includes(url));
+  const reposts=pool(at+120_000,200);reposts[0]={...reposts[0],url,score:100000,comments:100000};
+  assert.notEqual(snapshot(root,at+120_000,reposts).selectedStories[0].id,reposts[0].id);
+ }
+});
+test('an edited lead URL cannot revive a retired destination or erase history when replaced',async()=>{
+ const at=Date.now()-120_000,items=pool(at),old=items[0].url,newUrl='https://corrected.example/retired';
+ const root={schema:1,revision:1,version:'e-fictional',archives:{},ledger:{active:{id:items[0].id,url:old,key:old,aliases:[items[0].id]},retiredIds:[900],retiredKeys:[newUrl],observations:[]}};
+ items[0]={...items[0],url:newUrl};
+ const chosen=api.chooseLead(root,items,items.map(x=>x.id),at);
+ assert.notEqual(chosen.audit.leadId,items[0].id);
+ assert.ok(chosen.nextLedger.retiredIds.includes(items[0].id));
+ assert.ok(chosen.nextLedger.retiredIds.includes(900));
+ assert.ok(chosen.nextLedger.retiredKeys.includes(old));
+ assert.ok(chosen.nextLedger.retiredKeys.includes(newUrl));
+});
 test('source failure alone is not staged; validation is invalidated by intentional replacement',async()=>{
  const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});await s.call('failure',{generatedAt:f.generatedAt,kind:'source_unavailable',storyId:f.selectedStories[0].id});
  assert.equal((await s.call('status',{generatedAt:f.generatedAt})).staged,0);

@@ -61,7 +61,9 @@ export function validateEdition(input:unknown,previous?:Edition,snapshot?:Source
   stories=expected.map(source=>{const actual=byId.get(source.id);if(!actual||actual.score!==source.score||actual.comments!==source.comments||actual.time!==source.time||(snapshot.leadPolicyVersion!==undefined&&actual.url!==source.url))throw Error('Stories must match the authoritative expanded snapshot.');return {...actual,title:source.title,category:source.category,...(source.topics?{topics:source.topics}:{}),...(source.discoverySource?{discoverySource:source.discoverySource}:{}),hnRank:source.hnRank,hnPage:source.hnPage,editorialScore:source.editorialScore,placement:source.placement};});
  }else stories=rankByPoints(stories,previous?.stories[0]?.id); // Legacy saved editions remain readable; the writer always supplies a snapshot.
  for(const s of stories)if(s.summarySource==='unavailable'&&s.headline!==s.title)throw Error('Unavailable story must use its original HN title.');
- if(previous?.stories[0]?.id===stories[0]?.id){
+ // An edited HN destination is new source evidence, even for the same item ID.
+ // Preserve copy only while the article URL still identifies the same source.
+ if(previous?.stories[0]?.id===stories[0]?.id&&normalizeArticleUrl(previous.stories[0].url)===normalizeArticleUrl(stories[0].url)){
   if(stories[0].summarySource==='unavailable'&&previous.stories[0].headline!==stories[0].title)throw Error('Unavailable incumbent conflicts with preserved headline; reuse accurate verified copy or stop for review.');
   stories[0].headline=previous.stories[0].headline;
  }
