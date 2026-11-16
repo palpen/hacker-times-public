@@ -68,7 +68,7 @@ if(process.argv[2]==='--refresh-comments'){
 }
 if(process.argv[2]==='--export'){
  const destination=path.resolve(process.argv[3]||'outputs/developing-news-preview.html');
- const body=html=>html.match(/<main[\s\S]*?<\/main>/)[0].replace(/<script[\s\S]*?<\/script>/g,'').replaceAll('href="/developing-news/','href="#/story/').replaceAll('href="/developing-news"','href="#/"').replaceAll('href="/"','href="https://hackertimes.ca/"');
+ const body=html=>html.match(/<main[\s\S]*?<\/main>/)[0].replace(/<script[\s\S]*?<\/script>/g,'').replaceAll('href="/developing-news/','href="#/story/').replaceAll('href="/developing-news"','href="#/"').replaceAll('href="/"','href="https://hackertimes.ca/"').replaceAll('href="/?section=','href="https://hackertimes.ca/?section=');
  const pages={'/':body(api.renderDevelopingIndex(news)),...Object.fromEntries(stories.map(s=>['/story/'+s.id,body(api.renderDevelopingStory(s))]))};
  const css=fs.readFileSync('app/globals.css','utf8').replaceAll('/fonts/ManufacturingConsent-HackerTimes.woff2','data:font/woff2;base64,'+fs.readFileSync('public/fonts/ManufacturingConsent-HackerTimes.woff2').toString('base64'))+'\n'+fs.readFileSync('web/developing-news.css','utf8')+'\n'+fs.readFileSync('web/comments.css','utf8');
  const serialized=JSON.stringify(pages).replaceAll('<','\\u003c');
