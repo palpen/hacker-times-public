@@ -1,0 +1,61 @@
+name: Check production
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: production-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+      CLOUDFLARE_CF_FETCH_ENABLED: 'false'
+    steps:
+      - name: Check out the exact dispatched commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.22.1'
+
+      - name: Check the target before installing dependencies
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node scripts/validate-scheduled-config.mjs
+
+      - name: Install the locked dependencies
+        run: npm ci --ignore-scripts --workspaces=false --include=dev --include=optional --no-audit --no-fund
+
+      - name: Test fictional fixtures and deployment safeguards
+        run: node --test tests/*.test.mjs
+
+      - name: Typecheck
+        run: node node_modules/typescript/bin/tsc --noEmit --incremental false
+
+      - name: Lint the backend and deployment safeguards
+        run: node node_modules/eslint/bin/eslint.js lib/production worker/production.ts lib/comments-core.ts scripts/validate-scheduled-config.mjs scripts/deploy-scheduled-version.mjs tests/production*.mjs tests/staging-deployment.test.mjs tests/scheduled-deployment.test.mjs
+
+      - name: Build the exact Worker without deploying
+        run: node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.scheduled.jsonc --outdir dist/cloudflare-scheduled
+
+      - name: Recheck the reviewed configuration and source
+        run: |
+          node scripts/validate-scheduled-config.mjs
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+

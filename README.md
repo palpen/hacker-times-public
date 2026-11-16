@@ -16,6 +16,20 @@ No license for the original project code is asserted. See `THIRD_PARTY_NOTICES.m
 
 The hosting manifest intentionally has no `project_id`. Register and configure your own new Site, keep runtime owner configuration private, and leave mutation enablement off until authentication and storage are verified. The empty migration seed manifest is deliberate; existing production retirement state must never be reset using this demo.
 
+## Production releases
+
+`main` is the production release branch. **Check production** runs automatically
+on pull requests and pushes to `main`; it tests and builds without deployment credentials.
+To release, open GitHub Actions, select **Deploy production**, choose `main`, and
+click **Run workflow**. The workflow validates that exact commit, deploys it to
+Cloudflare, and verifies the active version and public readers.
+
+**Pause automatic publishing** and **Resume automatic publishing** are separate
+manual workflows on `main`. They affect the live site, preserve its saved editions,
+and remove or restore the half-hour cron. There is no separate staging site.
+The GitHub environment is `production`, restricted to `main`.
+See [the release runbook](CLOUDFLARE_SCHEDULE.md#production-releases).
+
 ## Checks
 
 Run `node --test tests/*.test.mjs`, `python3 tests/masthead.test.py`, `npx tsc --noEmit`, and `npm run build`. The Python check requires fontTools. Lint remains a separate check; the inherited React compatibility page has known lint findings. These commands do not publish.

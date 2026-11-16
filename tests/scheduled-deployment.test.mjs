@@ -7,8 +7,8 @@ import {deployScheduledVersion, validateLiveTriggers, uploadedVersion, verifyDep
 
 const config = JSON.parse(readFileSync(new URL('../wrangler.scheduled.jsonc', import.meta.url), 'utf8'));
 const readWorkflow = name => load(readFileSync(new URL('../.github/workflows/'+name, import.meta.url), 'utf8'));
-const workflow = readWorkflow('deploy-cloudflare-scheduled.yml');
-const staging = readWorkflow('deploy-cloudflare-staging.yml');
+const workflow = readWorkflow('deploy-production.yml');
+const staging = readWorkflow('pause-publishing.yml');
 
 test('scheduled deployment preserves authority and caps while enabling one half-hour trigger', () => {
   assert.doesNotThrow(() => validateScheduledConfig(config));
@@ -75,4 +75,87 @@ test('code releases refuse changed domains, schedules and incomplete version act
   assert.equal(reads,2);assert.equal(result.version,version);
   assert.deepEqual(calls[1].slice(0,3),['versions','deploy',version+'@100']);
   assert.equal(calls.some(args=>args[0]==='triggers'||args[0]==='deploy'),false);
+});
+
+const pausedConfig = JSON.parse(readFileSync(new URL('../wrangler.production.jsonc', import.meta.url), 'utf8'));
+const pausedTriggers = () => {
+  const value = triggers();
+  value.schedules.schedules = [];
+  for (const reader of value.readers) reader.health = {mode:'production', publicationEnabled:false, scheduleEnabled:false};
+  return value;
+};
+
+test('pause and resume change only the reviewed cron after activating the exact code version', async () => {
+  for (const operation of ['pause', 'resume']) {
+    const target = operation === 'pause' ? pausedConfig : config;
+    const finalState = operation === 'pause' ? pausedTriggers : triggers;
+    const initialState = operation === 'pause' ? triggers : pausedTriggers;
+    for (const initial of [initialState, finalState]) {
+      const events = []; let reads = 0;
+      const result = await deployScheduledVersion({config:target, operation, sha:'a'.repeat(40),
+        readTriggers:async()=>++reads === 1 ? initial() : finalState(),
+        runWrangler:args=>{
+          events.push(args);
+          return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
+        },
+        setSchedules:async schedules=>{events.push(schedules);},
+      });
+      assert.equal(result.operation, operation);
+      assert.equal(reads, 2);
+      assert.deepEqual(events.at(-1), operation === 'pause' ? [] : [{cron:'*/30 * * * *'}]);
+      assert.equal(events[0][events[0].indexOf('--config')+1], operation === 'pause' ? 'wrangler.production.jsonc' : 'wrangler.scheduled.jsonc');
+      assert.equal(events.some(args=>args[0] === 'deploy' || args[0] === 'triggers'), false);
+    }
+  }
+});
+
+test('publishing controls reject unexpected live state and verify the requested result', async () => {
+  const unexpected = pausedTriggers();
+  unexpected.schedules.schedules = [{cron:'* * * * *'}];
+  let mutations = 0;
+  const runWrangler = args => {
+    mutations++;
+    return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
+  };
+  for (const operation of ['pause', 'resume']) {
+    await assert.rejects(deployScheduledVersion({config:operation === 'pause' ? pausedConfig : config,
+      operation, sha:'a'.repeat(40), readTriggers:async()=>unexpected, runWrangler, setSchedules:async()=>{mutations++;}}));
+  }
+  assert.equal(mutations, 0);
+  await assert.rejects(deployScheduledVersion({config, operation:'resume', sha:'a'.repeat(40),
+    readTriggers:async()=>pausedTriggers(), runWrangler, setSchedules:async()=>{}}), /do not match/);
+  await assert.rejects(deployScheduledVersion({config, sha:'a'.repeat(40),
+    readTriggers:async()=>pausedTriggers(), runWrangler}), /do not match/);
+});
+
+test('automatic checks have no deployment credentials or production mutations', () => {
+  const check = readWorkflow('check-production.yml');
+  assert.deepEqual(check.on, {pull_request:null, push:{branches:['main']}});
+  assert.deepEqual(check.permissions, {contents:'read'});
+  assert.deepEqual(Object.keys(check.jobs), ['validate']);
+  const job = check.jobs.validate;
+  assert.equal(job.environment, undefined);
+  const text = JSON.stringify(job);
+  assert.equal(/secrets\.|CLOUDFLARE_API_TOKEN|deploy-scheduled-version\.mjs (deploy|pause|resume)/.test(text), false);
+  assert.match(text, /--dry-run/);
+  assert.match(text, /node --test tests\/\*\.test\.mjs/);
+});
+
+test('all manual production controls share main-only restrictions and serialization', () => {
+  for (const [file, name, operation] of [
+    ['deploy-production.yml', 'Deploy production', 'deploy'],
+    ['pause-publishing.yml', 'Pause automatic publishing', 'pause'],
+    ['resume-publishing.yml', 'Resume automatic publishing', 'resume'],
+  ]) {
+    const control = readWorkflow(file);
+    assert.equal(control.name, name);
+    assert.deepEqual(control.on, {workflow_dispatch:null});
+    assert.deepEqual(control.concurrency, {group:'hacker-times-production', 'cancel-in-progress':false});
+    assert.equal(control.jobs.deploy.environment, 'production');
+    assert.equal(control.jobs.deploy.needs, 'validate');
+    for (const job of Object.values(control.jobs)) {
+      assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
+    }
+    assert.match(control.jobs.deploy.steps.at(-1).run, new RegExp('deploy-scheduled-version\\.mjs '+operation));
+  }
 });

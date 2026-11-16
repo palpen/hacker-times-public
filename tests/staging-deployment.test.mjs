@@ -5,7 +5,7 @@ import {load} from 'js-yaml';
 import {validateDispatchContext, validateStagingConfig} from '../scripts/validate-staging-config.mjs';
 
 const config = JSON.parse(readFileSync(new URL('../wrangler.production.jsonc', import.meta.url), 'utf8'));
-const workflowText = readFileSync(new URL('../.github/workflows/deploy-cloudflare-staging.yml', import.meta.url), 'utf8');
+const workflowText = readFileSync(new URL('../.github/workflows/pause-publishing.yml', import.meta.url), 'utf8');
 const workflow = load(workflowText);
 const mutate = fn => {const changed = structuredClone(config); fn(changed); return changed;};
 const rejects = fn => assert.throws(() => validateStagingConfig(mutate(fn)), /reviewed default-off policy/);
@@ -60,14 +60,14 @@ test('changed identity, alternate storage, routes, environments and secrets fail
     !error.message.includes('fictional-secret-must-not-appear'));
 });
 
-test('only manual dispatches from the exact repository and migration branch are accepted', () => {
+test('only manual dispatches from the exact repository main branch are accepted', () => {
   const context = {GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: 'palpen/hacker-times-public',
-    GITHUB_REF: 'refs/heads/migration/cloudflare-owned', GITHUB_SHA: 'a'.repeat(40)};
+    GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40)};
   assert.doesNotThrow(() => validateDispatchContext(context));
   for (const [key, values] of Object.entries({
     GITHUB_EVENT_NAME: ['push', 'pull_request', 'pull_request_target', 'schedule', 'workflow_call', 'workflow_run'],
     GITHUB_REPOSITORY: ['fictional-fork/hacker-times-public', 'palpen/another-repo'],
-    GITHUB_REF: ['refs/heads/main', 'refs/heads/other', 'refs/tags/migration/cloudflare-owned'],
+    GITHUB_REF: ['refs/heads/migration/cloudflare-owned', 'refs/heads/other', 'refs/tags/migration/cloudflare-owned'],
     GITHUB_SHA: ['', 'a'.repeat(39), '$(fictional-command)'],
   })) {
     for (const value of [...values, undefined]) {
@@ -79,16 +79,16 @@ test('only manual dispatches from the exact repository and migration branch are 
 test('workflow is manual-only, least-privilege, environment-gated and serial', () => {
   assert.deepEqual(workflow.on, {workflow_dispatch: null});
   assert.deepEqual(workflow.permissions, {contents: 'read'});
-  assert.deepEqual(workflow.concurrency, {group: 'cloudflare-staging-hacker-times-production', 'cancel-in-progress': false});
+  assert.deepEqual(workflow.concurrency, {group: 'hacker-times-production', 'cancel-in-progress': false});
   assert.deepEqual(Object.keys(workflow.jobs), ['validate', 'deploy']);
   assert.equal(workflow.jobs.validate.environment, undefined);
   assert.equal(workflow.jobs.validate['timeout-minutes'], 20);
-  assert.equal(workflow.jobs.deploy.environment, 'cloudflare-staging');
+  assert.equal(workflow.jobs.deploy.environment, 'production');
   assert.equal(workflow.jobs.deploy['timeout-minutes'], 10);
   assert.equal(workflow.jobs.deploy.needs, 'validate');
   for (const job of Object.values(workflow.jobs)) {
     assert.equal(job['runs-on'], 'ubuntu-24.04');
-    assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/migration/cloudflare-owned'");
+    assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
     assert.deepEqual(job.env, {CI: 'true', WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false'});
     assert.equal(job.permissions, undefined);
   }
@@ -111,7 +111,7 @@ test('only final deploy receives the token, after locked install, tests, typeche
   const final = steps.at(-1);
   assert.deepEqual(final.env, {CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
     CLOUDFLARE_ACCOUNT_ID: 'dc81a3cb74492ea63c9f3e14f13711a2'});
-  assert.equal(final.run, 'test -n "$CLOUDFLARE_API_TOKEN"\nnode node_modules/wrangler/bin/wrangler.js deploy --config wrangler.production.jsonc\n');
+  assert.equal(final.run, 'test -n "$CLOUDFLARE_API_TOKEN"\nnode scripts/deploy-scheduled-version.mjs pause\n');
   assert.equal(workflowText.match(/secrets\./g)?.length, 1);
   assert.equal(workflowText.includes('OPENAI_API_KEY'), false);
   assert.equal(workflow.env, undefined);
@@ -134,7 +134,7 @@ test('only final deploy receives the token, after locked install, tests, typeche
   assert.equal(commands[2], 'node --test tests/*.test.mjs');
   assert.equal(commands[3], 'node node_modules/typescript/bin/tsc --noEmit --incremental false');
   assert.match(commands[4], /eslint\.js lib\/production/);
-  assert.equal(commands[5], 'node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.production.jsonc --outdir dist/cloudflare-staging');
+  assert.equal(commands[5], 'node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.production.jsonc --outdir dist/cloudflare-paused');
   assert.match(commands[6], /validate-staging-config\.mjs --github/);
   assert.match(commands[6], /git diff --exit-code/);
   assert.match(commands[6], /git ls-files --others --exclude-standard/);

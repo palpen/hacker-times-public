@@ -44,9 +44,9 @@ export function validateStagingConfig(config) {
 export function validateDispatchContext(env) {
   if (env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
       env.GITHUB_REPOSITORY !== 'palpen/hacker-times-public' ||
-      env.GITHUB_REF !== 'refs/heads/migration/cloudflare-owned' ||
+      env.GITHUB_REF !== 'refs/heads/main' ||
       !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '')) {
-    throw new Error('Staging deployment requires a manual dispatch from the approved repository and branch.');
+    throw new Error('Production operations require a manual dispatch from the approved repository main branch.');
   }
 }
 
