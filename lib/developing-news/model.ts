@@ -9,6 +9,9 @@ import type {Thread,Evidence,Assessment,Answer} from './types';
 type Journal = (key:string,request:unknown,response?:unknown)=>void;
 type ProviderResult = {answers?:Answer[];model?:string;output?:{content?:{type:string;text?:string}[]}[];status?:string;usage?:{input_tokens:number;output_tokens:number};[key:string]:unknown};
 const MAX_REQUEST_BYTES=200_000;
+export class ProviderFailure extends Error {
+ constructor(readonly endpoint:string,readonly kind:string,readonly httpStatus?:number){super('Model '+kind);}
+}
 export function verifiedEventAt(at:string|null,quote:string|null,source:string,asOf:string):string|null {
  if(!at||!quote||quote.length>500||!source.includes(quote)||!/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(at)||!Number.isFinite(Date.parse(at))||Date.parse(at)<=Date.parse(asOf))return null;
  const dates=quote.match(/\b\d{4}-\d{2}-\d{2}\b|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.? \d{1,2},? \d{4}\b/gi)??[];
@@ -29,10 +32,10 @@ export async function paidRequest(env:ProductionEnv,endpoint:'responses'|'decisi
  if(!reservation.created)throw Error('Uncertain request is retained; automatic replay prohibited');
  journal(key,request);
  const response=await fetch('https://api.openai.com/v1/'+endpoint,{method:'POST',redirect:'manual',headers:{Authorization:'Bearer '+env.OPENAI_API_KEY,'Content-Type':'application/json'},body,signal:AbortSignal.timeout(45_000)});
- if(!response.ok){void response.body?.cancel();throw Error('Model request unavailable');}
+ if(!response.ok){void response.body?.cancel();throw new ProviderFailure(endpoint,'http_error',response.status);}
  const result=JSON.parse(await boundedBody(response,24_000)) as ProviderResult;
  const usage=result.usage;
- if(!usage||![usage.input_tokens,usage.output_tokens].every(n=>Number.isSafeInteger(n)&&n>=0))throw Error('Invalid provider usage');
+ if(!usage||![usage.input_tokens,usage.output_tokens].every(n=>Number.isSafeInteger(n)&&n>=0))throw new ProviderFailure(endpoint,'invalid_usage');
  const actualCost=Math.ceil(usage.input_tokens*inputPrice+usage.output_tokens*outputPrice);
  journal(key,request,result);
  await call(env,'model-complete',{key,result,actualCost});
