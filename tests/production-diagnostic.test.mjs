@@ -13,3 +13,10 @@ test('temporary publisher inspection permits only fixed read operations and boun
  const result=await (await worker.fetch(new Request('https://private.example/status'),env)).json();
  assert.equal(result.models.length,3);assert.equal(JSON.stringify(result).includes('Fictional draft.'),false);assert.deepEqual(paths.map(x=>x.path),['/status','/status','/model-review','/model-review','/model-review']);
 });
+
+test('temporary inspection includes fixed read-only Developing News diagnostics',async()=>{
+ const paths=[];
+ const env={NEWSROOM:{idFromName:x=>x,get:()=>({fetch:async()=>Response.json({pending:null})})},DEVELOPING_NEWS:{idFromName:x=>{assert.equal(x,'developing-v1');return x;},get:()=>({fetch:async req=>{paths.push({url:req.url,method:req.method});return Response.json({enabled:true,lastRun:{outcome:'assessment_unavailable'}});}})}};
+ const result=await (await worker.fetch(new Request('https://private.example/status'),env)).json();
+ assert.equal(result.developing.lastRun.outcome,'assessment_unavailable');assert.deepEqual(paths,[{url:'https://developing.internal/status',method:'GET'}]);
+});

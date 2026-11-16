@@ -13,7 +13,7 @@ export type Roster = {revision:number;initialized:boolean;lastPromotionAt:string
 export type Answer = {name:string;type:string;[key:string]:unknown};
 export type Assessment = {thread:Thread; answers:Answer[]; checkedAt:string; material:boolean; resolved:boolean; evidence:Evidence; summary:string};
 export type Work = {article:Article; threadId?:string; evidence?:Evidence; matches?:Thread[]; assessmentAt?:string};
-export type Run = {id:string;asOf:string;baseRevision:number;queue:Work[];results:Assessment[];failed:string[];processed:number[];discoveryOk:boolean;budgetAvailable?:boolean};
+export type Run = {id:string;asOf:string;baseRevision:number;queue:Work[];results:Assessment[];failed:string[];failures?:{articleId:number;phase:string;reason:string}[];processed:number[];discoveryOk:boolean;budgetAvailable?:boolean};
 // publishedAt on legacy Evidence was HN submission time, never publisher metadata.
 export const submittedAt=(e:Evidence)=>e.submittedAt??e.publishedAt??e.retrievedAt;
 export const firstFollowedAt=(t:Thread)=>t.followingSince??(t.published?[...t.updates].map(u=>u.at).sort()[0]??null:null);

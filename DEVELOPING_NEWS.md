@@ -8,7 +8,7 @@ model scores, thresholds, prompts, or operational details.
 ## System boundaries
 
 ```
-Published editions ──> indexed article inbox ──> daily bounded assessment
+Published editions ──> indexed article inbox ──> hourly bounded assessment
                                       ↑                 │
                     active-story HN follow-up search    │ full source
                                                         ↓
@@ -25,8 +25,9 @@ Published editions ──> indexed article inbox ──> daily bounded assessmen
 `DevelopingNews` is a separate SQLite Durable Object in the existing Worker. Its
 alarms and storage are independent of `Newsroom` and never block edition
 publication. The existing half-hour cron ingests published edition metadata;
-model assessment runs once per rolling 24 hours in resumable, one-article alarm
-checkpoints. It checks up to five active stories and five shortlisted articles.
+model assessment runs once per UTC clock hour in resumable, one-article alarm
+checkpoints. The half-hour wake-up within an already assessed hour is a no-op;
+completion a few minutes after the hour does not cause cadence drift. It checks up to five active stories and five shortlisted articles.
 A seven-day inbox preserves candidates between editions. Unavailable candidates
 back off for 48 hours and leave the shortlist after three failures, so blocked
 publishers cannot monopolize discovery. The inbox prioritizes indexed
@@ -49,7 +50,8 @@ by rotation; timeline and archive reads are paginated.
 
 ## Editorial and cost contracts
 
-The v2 policy and question templates match the experiment copies. Their numeric
+The v2 editorial policy and question templates match the experiment copies; only
+the assessment cadence changes from daily to hourly. Their numeric
 thresholds, bootstrap limit, promotion clock, resolution rules, protections and
 revival requirements are unchanged. The reference policy's at-capacity replacement
 behavior is also retained. The production evaluator uses Web Crypto for the same
@@ -88,7 +90,7 @@ or new public administration endpoint is introduced.
 
 Release through the existing production release process after reviewing the
 feature diff with any other pending changes. A new installation initially shows
-an honest empty state; its first successful daily batch populates the section.
+an honest empty state; its first successful hourly batch populates the section.
 No sample stories or old experiment results are imported into production.
 
 Public routes:
@@ -101,7 +103,11 @@ rewriting immutable edition records. Historical editions link to Developing News
 but do not embed today's active roster.
 
 `hacker_times.developing_news` logs report completed/deferred runs and bounded
-counts. Private SQLite `dn_state` records hold the last plan and failed work IDs;
+counts, including runs where every candidate fails. Candidate failures record
+only an article ID, processing stage and bounded reason; no source or provider
+body is logged. Internal binding-only `GET /status` returns roster timing, run
+counts, deferred IDs and aggregate provider usage; the public router does not
+forward it. Private SQLite `dn_state` records hold the last plan and failed work IDs;
 `dn_requests` holds request/response audits. A deferred run leaves the prior
 published roster readable. No source/model work occurs on reader requests.
 

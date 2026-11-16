@@ -25,6 +25,13 @@ export class DevelopingStore {
  set(key:string,value:unknown){this.sql.exec('INSERT INTO dn_state VALUES (?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data',key,JSON.stringify(value));}
  roster():Roster{return this.get<Roster>('roster')??{revision:0,initialized:false,lastPromotionAt:null,lastRunAt:null};}
  run():Run|null{return this.get<Run>('run');}
+ runSummary(){const r=this.run();return r?{id:r.id,asOf:r.asOf,remaining:r.queue.length,assessed:r.results.length,failed:r.failed,failures:r.failures??[]}:null;}
+ diagnostics(){return {
+  threads:this.sql.exec('SELECT status,published,COUNT(*) AS count FROM dn_threads GROUP BY status,published').toArray(),
+  inbox:this.sql.exec('SELECT COUNT(*) AS count FROM dn_inbox').toArray()[0],
+  deferred:this.sql.exec('SELECT id,retry_at,attempts FROM dn_deferred ORDER BY retry_at DESC LIMIT 10').toArray(),
+  requests:this.sql.exec("SELECT CASE WHEN json_type(request,'$.questions') IS NOT NULL THEN 'decisions' ELSE 'responses' END AS endpoint,COALESCE(json_extract(response,'$.status'),CASE WHEN response IS NULL THEN 'unsettled' ELSE 'returned' END) AS status,json_extract(response,'$.incomplete_details.reason') AS incomplete_reason,COUNT(*) AS count,SUM(json_extract(response,'$.usage.input_tokens')) AS input_tokens,SUM(json_extract(response,'$.usage.output_tokens')) AS output_tokens FROM dn_requests GROUP BY endpoint,status,incomplete_reason").toArray()
+ };}
  thread(id:string,before?:string):Thread|null {
   const row=this.sql.exec<{data:string}>('SELECT data FROM dn_threads WHERE id=?',id).toArray()[0];if(!row)return null;
   const updates=this.sql.exec<{data:string}>('SELECT data FROM dn_updates WHERE thread_id=? AND at<? ORDER BY at DESC,id DESC LIMIT 50',id,before??'9999').toArray().map(r=>JSON.parse(r.data));

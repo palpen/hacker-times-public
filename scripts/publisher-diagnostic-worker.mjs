@@ -10,14 +10,19 @@ const worker = {
       return response.json();
     };
     const state=await read('status');
-    if(!state.pending)return Response.json({state});
+    let developing=null;
+    if(env.DEVELOPING_NEWS){
+      const response=await env.DEVELOPING_NEWS.get(env.DEVELOPING_NEWS.idFromName('developing-v1')).fetch(new Request('https://developing.internal/status'));
+      developing=response.ok?await response.json():{unavailable:response.status};
+    }
+    if(!state.pending)return Response.json({state,developing});
     const pending=await read('status',{generatedAt:state.pending});
     const models=[];
     for(const storyId of pending.missingIds.slice(0,3)){
       const model=await read('model-review',{generatedAt:state.pending,storyId});
       models.push({storyId,state:model?.state??null,attempt:model?.attempt??null,details:model?.details??null,hasDraft:!!model?.draft});
     }
-    return Response.json({state,pending,models});
+    return Response.json({state,pending,models,developing});
   },
 };
 export default worker;

@@ -9,7 +9,7 @@ validateDispatchContext(process.env);
 if(!process.env.CLOUDFLARE_API_TOKEN)throw new Error('Existing deployment credential required.');
 const directory=mkdtempSync(join(tmpdir(),'hacker-times-inspect-'));
 const config=join(directory,'wrangler.json');
-writeFileSync(config,JSON.stringify({name:'hacker-times-production',account_id:'dc81a3cb74492ea63c9f3e14f13711a2',compatibility_date:'2026-05-15',workers_dev:false,durable_objects:{bindings:[{name:'NEWSROOM',class_name:'Newsroom',script_name:'hacker-times-production'}]}}));
+writeFileSync(config,JSON.stringify({name:'hacker-times-production',account_id:'dc81a3cb74492ea63c9f3e14f13711a2',compatibility_date:'2026-05-15',workers_dev:false,durable_objects:{bindings:[{name:'NEWSROOM',class_name:'Newsroom',script_name:'hacker-times-production'},{name:'DEVELOPING_NEWS',class_name:'DevelopingNews',script_name:'hacker-times-production'}]}}));
 const deadline=setTimeout(()=>{console.error('Private preview timed out; no publication changes were requested.');process.exit(1);},90_000);
 let worker;
 try{

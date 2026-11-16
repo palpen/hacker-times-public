@@ -11,7 +11,7 @@ import * as reference from './fixtures/developing-news-v2/decision-policy.mjs';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-developing-'));
 const entry=path.join(dir,'entry.ts'),file=path.join(dir,'entry.mjs');
 const root=process.cwd();
-fs.writeFileSync(entry,`export * from '${root}/lib/developing-news/types';export * from '${root}/lib/developing-news/policy.mjs';export * from '${root}/lib/developing-news/lifecycle';export * from '${root}/lib/developing-news/model';export * from '${root}/lib/developing-news/render';export * from '${root}/lib/developing-news/routes';export {extractPublicationDate,publicationDate} from '${root}/lib/article-publication';export {collectEvidence} from '${root}/lib/developing-news/source';export {article} from '${root}/lib/reporting';`);
+fs.writeFileSync(entry,`export {assessmentDue} from '${root}/lib/developing-news/tracker';export * from '${root}/lib/developing-news/types';export * from '${root}/lib/developing-news/policy.mjs';export * from '${root}/lib/developing-news/lifecycle';export * from '${root}/lib/developing-news/model';export * from '${root}/lib/developing-news/render';export * from '${root}/lib/developing-news/routes';export {extractPublicationDate,publicationDate} from '${root}/lib/article-publication';export {collectEvidence} from '${root}/lib/developing-news/source';export {article} from '${root}/lib/reporting';`);
 await build({entryPoints:[entry],outfile:file,bundle:true,format:'esm',platform:'node'});
 const api=await import(pathToFileURL(file));
 const originalFetch=globalThis.fetch;
@@ -24,10 +24,16 @@ function assessment(t,judgments={}){const s=exampleStory(t.id,{status:t.status,a
 const roster={revision:0,initialized:false,lastPromotionAt:null,lastRunAt:null};
 const run=results=>({id:'test',asOf:at,baseRevision:0,queue:[],results,failed:[],processed:[],discoveryOk:true});
 
-test('production policy keeps frozen v2 thresholds, questions and all reference outcomes',async()=>{
- assert.deepEqual(api.policy,reference.policy);assert.deepEqual(api.questionTemplates,reference.questionTemplates);
+test('hourly production policy keeps frozen v2 editorial thresholds, questions and reference outcomes',async()=>{
+ assert.deepEqual(api.policy,{...reference.policy,schedule:{...reference.policy.schedule,assess_every_hours:1}});assert.deepEqual(api.questionTemplates,reference.questionTemplates);
  const fixtures=[demoScenario(),...['open','resolved','uncertain'].map(question_status=>{const snapshot=exampleSnapshot([exampleStory('x')]);return {snapshot,evaluation:syntheticEvaluation(snapshot,{x:{question_status}})};})];
- for(const {snapshot,evaluation} of fixtures){assert.equal(await api.fingerprint(api.buildRequest(snapshot)),reference.fingerprint(reference.buildRequest(snapshot)));assert.deepEqual(await api.proposeRoster(snapshot,evaluation),reference.proposeRoster(snapshot,evaluation));}
+ for(const {snapshot,evaluation} of fixtures){assert.equal(await api.fingerprint(api.buildRequest(snapshot)),reference.fingerprint(reference.buildRequest(snapshot)));const actual=await api.proposeRoster(snapshot,evaluation),expected=reference.proposeRoster(snapshot,evaluation);assert.equal(actual.policy_hash,await api.fingerprint({policy:api.policy,questionTemplates:api.questionTemplates}));assert.notEqual(actual.evaluation_id,expected.evaluation_id);assert.deepEqual({...actual,policy_hash:expected.policy_hash,evaluation_id:expected.evaluation_id},expected);}
+});
+test('hourly selection runs at the next clock hour without drifting to ninety minutes',()=>{
+ assert.equal(api.assessmentDue(null,Date.parse('2026-11-16T10:00:00Z')),true);
+ assert.equal(api.assessmentDue('2026-11-16T10:03:00Z',Date.parse('2026-11-16T10:30:00Z')),false);
+ assert.equal(api.assessmentDue('2026-11-16T10:03:00Z',Date.parse('2026-11-16T11:00:00Z')),true);
+ assert.equal(api.assessmentDue('2026-11-15T23:59:00Z',Date.parse('2026-11-16T00:00:00Z')),true);
 });
 test('bootstrap publishes three sourced pages and timeline updates deduplicate',async()=>{
  const results=['a','b','c','d','e'].map(x=>assessment(thread('s-'+x.repeat(20))));
@@ -92,6 +98,7 @@ test('real SQLite keeps six-month archives searchable, history paginated and pri
   await mf.dispose();mf=new Miniflare(convertV4MiniflareOptions(options));
   assert.equal((await (await mf.dispatchFetch('https://test/match')).json())[0].id,archived.id);
   assert.equal((await mf.dispatchFetch('https://test/last-plan')).status,404);
+  const diagnostics=await (await mf.dispatchFetch('https://test/status')).json();assert.equal(diagnostics.storage.threads.length,1);assert.equal(diagnostics.storage.requests.length,0);
  }finally{await mf.dispose();}
 });
 
@@ -102,14 +109,19 @@ test('the production tracker runs full-source drafting, Decisions and atomic pub
  export class Budget{constructor(s){this.s=s;}async fetch(r){const p=new URL(r.url).pathname,a=await r.json();if(p==='/edition')return Response.json({version:'test',edition:{generatedAt:new Date().toISOString(),stories:[{id:7001,title:'Finch investigation',url:'https://fictional.example/7001',score:500,time:Math.floor(Date.now()/1000)-60}]}});if(p==='/status')return Response.json({safetyStop:null,runner:{leaseExpiresAt:null}});if(p==='/model-reserve'){const old=await this.s.storage.get(a.key);if(old)return Response.json(old);await this.s.storage.put(a.key,{state:'reserved'});return Response.json({state:'reserved',created:true});}if(p==='/model-complete'){await this.s.storage.put(a.key,{state:'completed',result:a.result});return Response.json({saved:true});}return new Response('Unexpected request',{status:500});}}
  export default {fetch:(r,e)=>e.DEVELOPING_NEWS.get(e.DEVELOPING_NEWS.idFromName('developing-v1')).fetch(r)};`);
  await build({entryPoints:[source],outfile:bundle,bundle:true,format:'esm',platform:'browser'});
- const provider=`export default {async fetch(r){const u=new URL(r.url);if(u.hostname==='fictional.example')return new Response('<article>'+('A fictional background paragraph. '.repeat(500))+'Finch says an investigation is underway. COMPLETE SOURCE END</article>',{headers:{'content-type':'text/html'}});const q=await r.json();const input=JSON.parse(q.input);if(u.pathname==='/v1/responses'){if(!input.source.text.endsWith('COMPLETE SOURCE END'))throw Error('Full text missing');return Response.json({status:'completed',usage:{input_tokens:5000,output_tokens:200},output:[{content:[{type:'output_text',text:JSON.stringify({matchId:'new',matchConfidence:1,title:'Finch investigation',question:'What caused the Finch outage?',summary:'Finch says an investigation is underway.',supportingQuote:'Finch says an investigation is underway.',terms:['Finch','outage'],nextEventAt:null,nextEventQuote:null})}]}]});}if(u.pathname==='/v1/decisions'){if(!input.evidence[0].summary.endsWith('COMPLETE SOURCE END'))throw Error('Full decision source missing');return Response.json({model:'gpt-6-luna',usage:{input_tokens:5000,output_tokens:0},answers:q.questions.map(x=>{if(x.type==='predicate')return {name:x.name,type:x.type,probability:0.95};if(x.type==='score')return {name:x.name,type:x.type,score:3,confidence:1,probabilities:x.levels.map((v,i)=>({label:v.label,value:i,probability:i===3?1:0}))};const choice={evidence:'sufficient',question_status:'open',latest_development:'material'}[x.name];return {name:x.name,type:x.type,choice,confidence:0.96,probabilities:x.choices.map(c=>({value:c.value,probability:c.value===choice?0.96:0.02}))};})});}throw Error('Unexpected network');}};`;
+ const provider=`export default {async fetch(r,env){const u=new URL(r.url);if(u.hostname==='fictional.example'&&env.UNAVAILABLE)return new Response('Unavailable',{status:403});if(u.hostname==='fictional.example')return new Response('<article>'+('A fictional background paragraph. '.repeat(500))+'Finch says an investigation is underway. COMPLETE SOURCE END</article>',{headers:{'content-type':'text/html'}});const q=await r.json();const input=JSON.parse(q.input);if(u.pathname==='/v1/responses'){if(!input.source.text.endsWith('COMPLETE SOURCE END'))throw Error('Full text missing');return Response.json({status:'completed',usage:{input_tokens:5000,output_tokens:200},output:[{content:[{type:'output_text',text:JSON.stringify({matchId:'new',matchConfidence:1,title:'Finch investigation',question:'What caused the Finch outage?',summary:'Finch says an investigation is underway.',supportingQuote:'Finch says an investigation is underway.',terms:['Finch','outage'],nextEventAt:null,nextEventQuote:null})}]}]});}if(u.pathname==='/v1/decisions'){if(!input.evidence[0].summary.endsWith('COMPLETE SOURCE END'))throw Error('Full decision source missing');return Response.json({model:'gpt-6-luna',usage:{input_tokens:5000,output_tokens:0},answers:q.questions.map(x=>{if(x.type==='predicate')return {name:x.name,type:x.type,probability:0.95};if(x.type==='score')return {name:x.name,type:x.type,score:3,confidence:1,probabilities:x.levels.map((v,i)=>({label:v.label,value:i,probability:i===3?1:0}))};const choice={evidence:'sufficient',question_status:'open',latest_development:'material'}[x.name];return {name:x.name,type:x.type,choice,confidence:0.96,probabilities:x.choices.map(c=>({value:c.value,probability:c.value===choice?0.96:0.02}))};})});}throw Error('Unexpected network');}};`;
  const env={DEVELOPING_NEWS_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',SCHEDULE_ENABLED:'true',PUBLICATION_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.5',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
- const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'pipeline',modules:true,scriptPath:bundle,compatibilityDate:'2026-05-15',durableObjects:{DEVELOPING_NEWS:{className:'Tracker',useSQLite:true},NEWSROOM:{className:'Budget',useSQLite:true}},bindings:env,outboundService:'provider'},{name:'provider',modules:true,script:provider,compatibilityDate:'2026-05-15'}]}));
+ for(const unavailable of [false,true]){
+ const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'pipeline',modules:true,scriptPath:bundle,compatibilityDate:'2026-05-15',durableObjects:{DEVELOPING_NEWS:{className:'Tracker',useSQLite:true},NEWSROOM:{className:'Budget',useSQLite:true}},bindings:env,outboundService:'provider'},{name:'provider',modules:true,script:provider,bindings:{UNAVAILABLE:unavailable},compatibilityDate:'2026-05-15'}]}));
  try{
   let result;for(let i=0;i<3;i++){result=await (await mf.dispatchFetch('https://test/test-step')).json();if(result.active.length)break;}
+  const status=await (await mf.dispatchFetch('https://test/status')).json();
+  if(unavailable){assert.equal(result.active.length,0);assert.equal(status.lastRun.outcome,'assessment_unavailable');assert.equal(status.lastRun.failures[0].reason,'source_unavailable');assert.equal(status.nextCheckDue,false);continue;}
+  assert.equal(status.lastRun.outcome,'completed');
   assert.equal(result.active.length,1,'a valid full-source assessment must populate the real tracker');assert.equal(result.active[0].updates.length,1);assert.equal(result.active[0].updates[0].source.url,'https://fictional.example/7001');
-  const again=await (await mf.dispatchFetch('https://test/test-step')).json();assert.deepEqual(again,result,'the next daily tick must not repeat publication');
+  const again=await (await mf.dispatchFetch('https://test/test-step')).json();assert.deepEqual(again,result,'the next tick in the same hour must not repeat publication');
  }finally{await mf.dispose();}
+ }
 });
 
 test('a budget stop preserves the roster even after earlier successful assessments',async()=>{
@@ -185,4 +197,8 @@ test('following date survives reactivation and source dates remain distinct from
   const collected=await api.collectEvidence({id:123,title:'Report',url:'https://fictional.example/report',time:Date.parse(at)/1000,score:1});
   assert.equal(collected.submittedAt,at);assert.equal(collected.articlePublishedAt,'2026-11-09');assert.equal(collected.publishedAt,undefined);
  }finally{globalThis.fetch=collectedFetch;}
+});
+
+test('public reader routes do not forward internal tracker diagnostics',async()=>{
+ for(const path of ['/status','/api/developing-news/status','/developing-news/status'])assert.equal(await api.developingRoute(new Request('https://fictional.example'+path),{}),null);
 });

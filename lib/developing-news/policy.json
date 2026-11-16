@@ -3,7 +3,7 @@
   "mode": "propose_only",
   "purpose": "Select the small Story so far roster while preserving permanent story pages.",
   "schedule": {
-    "assess_every_hours": 24,
+    "assess_every_hours": 1,
     "match_articles_on_ingest": true,
     "publish_only_material_changes": true
   },
