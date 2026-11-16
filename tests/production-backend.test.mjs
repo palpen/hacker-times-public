@@ -519,7 +519,7 @@ test('publisher outages preserve every selected story and allow complete publica
     assert.equal(story.url,selected.url);assert.equal(story.headline,selected.title);
     assert.equal(story.summarySource,'unavailable');assert.equal(story.summary,'');assert.equal(story.shortSummary,'');
     const source=await s.storage.get('source/'+f.generatedAt+'/'+selected.id);
-    assert.equal(source.status,failure==='transport'?'fetch_failed':'unavailable_http_'+failure);
+    assert.equal(source.status,failure==='transport'?'fetch_network_error':'unavailable_http_'+failure);
    }
    assert.equal((await s.call('status')).pending,null);
   }

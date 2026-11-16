@@ -281,13 +281,42 @@ pinned source and request key. Historical output failures whose exact usage was
 not saved can retain their full charge before a bounded new attempt; the ledger
 is never erased. Per-story failure metadata survives later failures in a batch.
 
-Publisher HTML is byte- and time-bounded, then decoded using its declared charset
-or BOM; unlabelled pages try strict UTF-8 and then Windows-1252. JSON/API bodies
-remain strict UTF-8. A publisher HTTP429 keeps the selected original title and
-link with empty summaries (`temporarily_rate_limited`); the reader displays
-“Summary unavailable.” This prevents repeatedly fetching a rate-limited source
-within one edition, and does not omit the story or fabricate evidence. Transport
-errors and publisher 5xx responses still require a successful later fetch.
+Publisher HTML is bounded to **4,000,000 decoded bytes**, with the existing
+10-second per-request and 15-second body-read deadlines. The decoded-byte limit
+also applies when the response is compressed or omits Content-Length. HN HTML
+collection retains its smaller 1,500,000-byte bound; newspaper summary evidence
+remains at 8,500 characters. Developing News full-text callers retain the complete
+extracted article within the byte bound, including explicit publication dates. Declared charsets/BOMs are honored; unlabelled pages try strict
+UTF-8 and then Windows-1252. JSON/API bodies remain strict UTF-8.
+
+An HTML parser extracts article/main/body text without executing scripts. It
+excludes navigation, controls, hidden elements and unrelated page furniture;
+attribute values cannot leak into article text. Unstructured pages must contain
+prose beyond their titles and links. When that text is absent, a descriptive
+Open Graph or standard meta description can supply `page_description` evidence.
+Short site labels and title-only metadata are discarded. The editorial model
+still determines whether the supplied evidence supports a faithful summary;
+HTML success alone is never sufficient. Invalid image metadata only omits the
+image, rather than discarding usable article text.
+
+Source records and published `articleStatus` now distinguish:
+
+- `fetch_body_too_large`, `fetch_timeout`, `fetch_body_timeout`, `fetch_body_error`
+- `fetch_network_error`, `fetch_request_limit`, `fetch_decode_failed`
+- `fetch_url_rejected`, `fetch_redirect_missing`, `fetch_redirect_limit`
+- `fetch_processing_failed` for an unexpected extraction error
+- `insufficient_source_text` for a page without usable text or description
+- `non_html` for unsupported formats, including PDF
+- `unavailable_http_<status>` for publisher HTTP errors, with HTTP 429 retained as
+  `temporarily_rate_limited` in production source records
+
+These fixed codes contain no exception messages, response bodies or credentials.
+An unavailable source preserves the selected title/link with empty summaries;
+it does not stall the edition or fabricate evidence. Source fetches are pinned
+within one edition and retried in the next. Unchanged model inputs still reuse
+cached copy; existing reservations and historic editions are untouched. This
+change does not add browser execution, PDF extraction, video transcription,
+or methods to bypass publisher access restrictions.
 
 
 The final live output blocker was a false sentence boundary at a middle initial

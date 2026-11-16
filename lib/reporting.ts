@@ -1,8 +1,9 @@
 import {extractPublicationDate} from './article-publication';
 import {boundedBody,boundedBytes,RequestError} from './security';
+import {extractArticleHtml} from './article-extraction';
 import {CollectionError,collectionFailure} from './collection-error';
 import { publicUrl, ranking, classifyTopic, selectStories, type Candidate } from './news';
-import {policyVersion,policyConfig,monthPolicyVersion,monthPolicyConfig,monthRanking,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig,unifiedSectionRanking,classifyTopicV4,topicTags,selectUnifiedMonthlyStories} from './policy';
+import {policyVersion,policyConfig,monthPolicyConfig,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig,unifiedSectionRanking,classifyTopicV4,topicTags,selectUnifiedMonthlyStories} from './policy';
 import {discoverHistory,historyLimits} from './history';
 export type LeadSelector=(pool:Candidate[],frontPageIds:number[],at:number)=>Promise<number>;
 const API = 'https://hacker-news.firebaseio.com/v0/';
@@ -11,27 +12,64 @@ async function parallel<T,R>(items:T[],limit:number,fn:(item:T)=>Promise<R>):Pro
 async function json(path:string) {const r=await fetch(API+path,{redirect:'manual',signal:AbortSignal.timeout(12000)});if(!r.ok){void r.body?.cancel().catch(()=>{});throw new RequestError('HN API unavailable; redirect or non-success response',502);}return JSON.parse(await boundedBody(r,200_000));}
 function decode(text:string){return text.replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>Number(n)<=0x10ffff?String.fromCodePoint(Number(n)):'�').replace(/\s+/g,' ').trim();}
 function attr(tag:string,name:string){const m=tag.match(new RegExp('(?:^|\\s)'+name+'\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s>]+))','i'));return decode(m?.[1]??m?.[2]??m?.[3]??'');}
-function meta(html:string,names:string[]){for(const tag of html.match(/<meta\s[^>]*>/gi)||[]){if(names.includes((attr(tag,'property')||attr(tag,'name')).toLowerCase()))return attr(tag,'content');}return '';}
-async function boundedText(response:Response){
- const bytes=await boundedBytes(response,1_500_000);
+export const MAX_ARTICLE_HTML_BYTES=4_000_000;
+class SourceFetchError extends Error {constructor(readonly code:string){super(code);}}
+async function boundedText(response:Response,limit=1_500_000){
+ const bytes=await boundedBytes(response,limit);
+ try{
  // Publisher HTML may use legacy encodings; API/JSON decoding stays strict UTF-8.
  const sample=new TextDecoder().decode(bytes.subarray(0,1024));
  const declared=response.headers.get('content-type')?.match(/charset\s*=\s*["']?([a-zA-Z0-9_-]+)/i)?.[1]||sample.match(/<meta\b[^>]*charset\s*=\s*["']?([a-zA-Z0-9_-]+)/i)?.[1];
  const bom=bytes[0]===0xef&&bytes[1]===0xbb&&bytes[2]===0xbf?'utf-8':bytes[0]===0xff&&bytes[1]===0xfe?'utf-16le':bytes[0]===0xfe&&bytes[1]===0xff?'utf-16be':null;
  if(bom||declared)return new TextDecoder(bom||declared,{fatal:true}).decode(bytes);
  try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{return new TextDecoder('windows-1252',{fatal:true}).decode(bytes);}
+ }catch{throw new SourceFetchError('fetch_decode_failed');}
 }
 // Lexical defense is not DNS pinning. Use only Workers global fetch: no private network bindings.
 export function publicFetchUrl(url:string){if(!publicUrl(url))return false;return !/(^|\.)chatgpt\.site$/.test(new URL(url).hostname);}
-export async function safeFetch(url:string):Promise<{response:Response;finalUrl:string}>{let current=url;for(let n=0;n<4;n++){if(!publicFetchUrl(current))throw new Error('URL is not an allowed public web address');const response=await fetch(current,{headers:{'user-agent':USER_AGENT,'accept':'text/html,application/xhtml+xml'},redirect:'manual',signal:AbortSignal.timeout(10000)});if(response.status>=300&&response.status<400){const location=response.headers.get('location');void response.body?.cancel().catch(()=>{});if(!location)throw new Error('Redirect without location');current=new URL(location,current).href;continue;}return {response,finalUrl:current};}throw new Error('Too many redirects');}
-export async function article(url:string,options:{fullText?:boolean}={}){try{
- const {response:res,finalUrl}=await safeFetch(url);if(!res.ok){void res.body?.cancel().catch(()=>{});return {articleStatus:'unavailable_http_'+res.status,excerpt:'',imageCandidates:[]};}if(!/text\/html|xhtml/i.test(res.headers.get('content-type')||'')){void res.body?.cancel().catch(()=>{});return {articleStatus:'non_html',excerpt:'',imageCandidates:[]};}
- const html=await boundedText(res);const articleHtml=html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i)?.[1]||html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1]||html;
- const extracted=decode(articleHtml.replace(/<(script|style|nav|header|footer|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi,' ').replace(/<[^>]*>/g,' '));
- const excerpt=options.fullText?extracted:extracted.slice(0,8500);
- const candidate=meta(html,['og:image','twitter:image','twitter:image:src']);const resolved=candidate?new URL(candidate,finalUrl).href:'';
- return {articleStatus:'fetched',articlePublishedAt:extractPublicationDate(html,finalUrl),pageTitle:decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'').slice(0,500),description:meta(html,['og:description','description']).slice(0,700),publisher:meta(html,['og:site_name']).slice(0,240),excerpt,imageCandidates:resolved&&publicUrl(resolved)?[resolved]:[]};
- }catch(e){return {articleStatus:'fetch_failed',excerpt:'',imageCandidates:[]};}}
+function timedOut(error:unknown){return error instanceof Error&&['AbortError','TimeoutError'].includes(error.name);}
+export async function safeFetch(url:string):Promise<{response:Response;finalUrl:string}>{
+ let current=url;
+ for(let n=0;n<4;n++){
+  if(!publicFetchUrl(current))throw new SourceFetchError('fetch_url_rejected');
+  let response:Response;
+  try{response=await fetch(current,{headers:{'user-agent':USER_AGENT,'accept':'text/html,application/xhtml+xml'},redirect:'manual',signal:AbortSignal.timeout(10000)});}
+  catch(error){throw new SourceFetchError(timedOut(error)?'fetch_timeout':error instanceof Error&&/too many subrequests/i.test(error.message)?'fetch_request_limit':'fetch_network_error');}
+  if(response.status>=300&&response.status<400){
+   const location=response.headers.get('location');void response.body?.cancel().catch(()=>{});
+   if(!location)throw new SourceFetchError('fetch_redirect_missing');
+   try{current=new URL(location,current).href;}catch{throw new SourceFetchError('fetch_url_rejected');}
+   continue;
+  }
+  return {response,finalUrl:current};
+ }
+ throw new SourceFetchError('fetch_redirect_limit');
+}
+export async function article(url:string,options:{fullText?:boolean}={}){
+ let response:Response|undefined,readingBody=false;
+ try{
+  const fetched=await safeFetch(url);response=fetched.response;
+  if(!response.ok){void response.body?.cancel().catch(()=>{});return {articleStatus:'unavailable_http_'+response.status,excerpt:'',imageCandidates:[]};}
+  if(!/^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i.test(response.headers.get('content-type')||'')){void response.body?.cancel().catch(()=>{});return {articleStatus:'non_html',excerpt:'',imageCandidates:[]};}
+  readingBody=true;
+  const html=await boundedText(response,MAX_ARTICLE_HTML_BYTES);
+  readingBody=false;
+  const source=extractArticleHtml(html,options);
+  // Broken optional image metadata must never discard otherwise usable text.
+  let image='';try{if(source.image)image=new URL(source.image,fetched.finalUrl).href;}catch{/* Omit invalid metadata. */}
+  const {excerpt,description,pageTitle,publisher}=source;
+  const available=!!(excerpt||description);
+  return {articleStatus:available?'fetched':'insufficient_source_text',articlePublishedAt:extractPublicationDate(html,fetched.finalUrl),pageTitle,description,publisher,excerpt,
+   imageCandidates:available&&image&&publicUrl(image)?[image]:[]};
+ }catch(error){
+  void response?.body?.cancel().catch(()=>{});
+  const articleStatus=error instanceof SourceFetchError?error.code:
+   error instanceof RequestError&&error.status===413?'fetch_body_too_large':
+   readingBody&&((error instanceof RequestError&&error.status===408)||timedOut(error))?'fetch_body_timeout':
+   readingBody?'fetch_body_error':'fetch_processing_failed';
+  return {articleStatus,excerpt:'',imageCandidates:[]};
+ }
+}
 export function frontPageIds(html:string):number[]{
  const ids:number[]=[];
  for(const tag of html.match(/<tr\b[^>]*>/gi)||[]){if(!attr(tag,'class').split(/\s+/).includes('athing'))continue;const id=Number(attr(tag,'id'));if(Number.isSafeInteger(id)&&id>0&&!ids.includes(id))ids.push(id);}
