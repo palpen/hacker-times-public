@@ -61,6 +61,19 @@ test('navigation and title-only shells use descriptive metadata with correct mod
  assert.equal(calls,1);assert.equal(result.story.summarySource,'page_description');
 });
 
+test('generic product metadata cannot stand in for a specifically named article',async()=>{
+ const description='Finch offers a comprehensive collection of sorting tools, document processing and archive management features.';
+ const candidate={...selected,title:'Finch4-Max'};
+ globalThis.fetch=async()=>htmlResponse(`<head><title>Finch</title><meta property="og:description" content="${description}"></head><body><h1>Finch</h1></body>`);
+ const source=await collectSource({...snapshot,selectedStories:[candidate]},candidate.id);
+ assert.equal(source.status,'insufficient_source_text');assert.equal(source.kind,'unavailable');assert.equal(source.description,'');
+ const result=await generateEditorialCopy(source,candidate,undefined,async()=>assert.fail('No model call for generic metadata'));
+ assert.equal(result.story.headline,candidate.title);assert.equal(result.story.summarySource,'unavailable');
+ globalThis.fetch=async()=>htmlResponse('<head><title>Finch</title><meta property="og:description" content="Finch4-Max introduces color-based sorting for the fictional archive collection."></head><body><h1>Finch</h1></body>');
+ const matching=await collectSource({...snapshot,selectedStories:[candidate]},candidate.id);
+ assert.equal(matching.kind,'article');assert.match(matching.description,/Finch4-Max/);
+});
+
 test('empty app and repository shells preserve the title without a model request',async()=>{
  for(const html of ['<head><title>Finch</title></head><body><h1>Finch</h1><script>bootApp()</script></body>', '<head><title>Finch project</title><meta name="description" content="CodeHost.com"></head><main><h1>Project information</h1>Project ID: 123 <a>README</a><a>License</a><a>Changelog</a>Created on November 12, 2026</main>']){
   globalThis.fetch=async()=>htmlResponse(html);

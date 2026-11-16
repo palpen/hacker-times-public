@@ -18,8 +18,20 @@ function substantive(text:string){
  return value.length>=80&&((value.match(/[\p{L}\p{N}]+/gu)?.length??0)>=12||/[\u3040-\u30ff\u3400-\u9fff]{20}/u.test(value));
 }
 
+// A generic site/product description is not evidence about a specific linked
+// story. Require a subject word from the selected title before using metadata
+// alone; semantic accuracy remains the editorial model's responsibility.
+const titleStopWords=new Set('about after again also another before could from have into just more most news only other over should show some than that their them then there these they this those through today under using very what when where which while will with would your introducing introduction'.split(' '));
+function words(text:string){return text.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu)??[];}
+function descriptionMatchesTitle(description:string,title:string){
+ const subjects=words(title).filter(word=>word.length>=4&&!titleStopWords.has(word));
+ if(!subjects.length)return false;
+ const available=new Set(words(description));
+ return subjects.some(word=>available.has(word));
+}
+
 /** Parse markup without executing scripts or treating attributes as article text. */
-export function extractArticleHtml(html:string,options:{fullText?:boolean}={}){
+export function extractArticleHtml(html:string,options:{fullText?:boolean;originalTitle?:string}={}){
  const textLimit=options.fullText?html.length:TEXT_LIMIT;
  const body=bucket(),mains:Text[]=[],articles:Text[]=[],stack:Frame[]=[];
  const metadata=new Map<string,string>();let title='';
@@ -62,7 +74,7 @@ export function extractArticleHtml(html:string,options:{fullText?:boolean}={}){
  const pageTitle=clean(title),text=clean(selected?.text??'');
  const excerpt=text!==pageTitle?(options.fullText?text:text.slice(0,8500)):'';
  // Site names and title-only metadata cannot support a separate summary.
- const description=(['og:description','description'].map(key=>metadata.get(key)||'').find(value=>value!==pageTitle&&value.length>=40)||'').slice(0,700);
+ const description=(['og:description','description'].map(key=>metadata.get(key)||'').find(value=>value!==pageTitle&&value.length>=40&&(excerpt||!options.originalTitle||descriptionMatchesTitle(value,options.originalTitle)))||'').slice(0,700);
  return {excerpt,description,pageTitle,publisher:(metadata.get('og:site_name')||'').slice(0,240),
   image:metadata.get('og:image')||metadata.get('twitter:image')||metadata.get('twitter:image:src')||''};
 }

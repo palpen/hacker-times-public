@@ -294,7 +294,9 @@ excludes navigation, controls, hidden elements and unrelated page furniture;
 attribute values cannot leak into article text. Unstructured pages must contain
 prose beyond their titles and links. When that text is absent, a descriptive
 Open Graph or standard meta description can supply `page_description` evidence.
-Short site labels and title-only metadata are discarded. The editorial model
+Short site labels, title-only metadata, and descriptions without a subject word
+from the selected story title are discarded. This prevents a generic product
+homepage description from replacing a specific article or release summary. The editorial model
 still determines whether the supplied evidence supports a faithful summary;
 HTML success alone is never sufficient. Invalid image metadata only omits the
 image, rather than discarding usable article text.
