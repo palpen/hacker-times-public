@@ -15,10 +15,11 @@ const expected = {
   workers_dev: true,
   observability: {enabled: true, head_sampling_rate: 1},
   routes: [{pattern: 'hackertimes.ca', custom_domain: true}, {pattern: 'www.hackertimes.ca', custom_domain: true}],
-  durable_objects: {bindings: [{name: 'NEWSROOM', class_name: 'Newsroom'}]},
-  migrations: [{tag: 'production-v1', new_sqlite_classes: ['Newsroom']}],
+  durable_objects: {bindings: [{name: 'NEWSROOM', class_name: 'Newsroom'}, {name: 'DEVELOPING_NEWS', class_name: 'DevelopingNews'}]},
+  migrations: [{tag: 'production-v1', new_sqlite_classes: ['Newsroom']}, {tag: 'developing-news-v1', new_sqlite_classes: ['DevelopingNews']}],
   vars: {
     MUTATIONS_ENABLED: 'false',
+    DEVELOPING_NEWS_ENABLED: 'false',
     EDITORIAL_MODEL: 'gpt-6-luna',
     MODEL_API_ENABLED: 'false',
     AUTO_EDITORIAL_ENABLED: 'false',

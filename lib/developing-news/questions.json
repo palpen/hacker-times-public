@@ -1,0 +1,91 @@
+[
+  {
+    "type": "choice",
+    "name": "evidence",
+    "instructions": "Is there enough grounded evidence that this specific event, investigation, disclosure, dispute, or release exists to justify deciding whether to FOLLOW it? Do not require proof of allegations, a known cause, a completed investigation, an official response, remediation, or a final outcome. An attributed first-party acknowledgment of an investigation or a substantive research disclosure can suffice to track the unresolved matter. Treat allegations as allegations and company statements as attributed statements. Headlines alone, inaccessible pages, vague speculation, and unrelated news do not suffice. Judge the supplied content, not a familiar publisher name.",
+    "choices": [
+      {
+        "value": "sufficient",
+        "description": "Substantive attributable evidence establishes the event or ongoing process; its outcome or allegations may remain unproven."
+      },
+      {
+        "value": "insufficient",
+        "description": "Only claims, headlines, inaccessible sources, irrelevant material, or unsupported speculation are supplied."
+      },
+      {
+        "value": "uncertain",
+        "description": "Unclear whether the underlying event or process is established at all; not merely unclear how it will end."
+      }
+    ]
+  },
+  {
+    "type": "choice",
+    "name": "question_status",
+    "instructions": "Does the evidence resolve the story's specific central_question? Assess the exact question, not whether the wider subject remains newsworthy. Silence, age, declining attention, a missed deadline, or an announcement without an outcome do not establish resolution.",
+    "choices": [
+      {
+        "value": "open",
+        "description": "The specific question remains unresolved."
+      },
+      {
+        "value": "resolved",
+        "description": "A documented outcome answers the specific question."
+      },
+      {
+        "value": "uncertain",
+        "description": "The supplied evidence does not establish whether the question is resolved."
+      }
+    ]
+  },
+  {
+    "type": "predicate",
+    "name": "plausible_followup",
+    "instructions": "The evidence establishes a concrete unresolved process or consequence with an identifiable next thing to check: investigation findings, a response to a documented disclosure, remediation, a pending appeal or decision, a promised release, or follow-up measurements. A known outcome or scheduled date is NOT required. Acknowledgment of an ongoing investigation qualifies even without its findings. Mere general interest, evergreen history, completed one-off releases without a pending milestone, and hypothetical future news do not qualify."
+  },
+  {
+    "type": "choice",
+    "name": "latest_development",
+    "instructions": "Compare new_evidence_ids with known_facts for a substantive development in this exact story. For a first-time candidate with no baseline, a documented initiating event qualifies as material; do not require an earlier article. For an existing or quiet story, repeated coverage, opinions, changed headlines and unrelated news about the same organization are repetition. If no new evidence is supplied choose repetition. Choose uncertain only if relevance or novelty cannot be established. This question does not decide whether to begin tracking a new candidate.",
+    "choices": [
+      {
+        "value": "material",
+        "description": "New evidence changes what is known about the specific story."
+      },
+      {
+        "value": "repetition",
+        "description": "No substantive change to this story, including unrelated news about the same entity."
+      },
+      {
+        "value": "uncertain",
+        "description": "It is unclear whether a relevant substantive change occurred."
+      }
+    ]
+  },
+  {
+    "type": "score",
+    "name": "priority",
+    "instructions": "Rate the value of actively following this specific story now for Hacker Times technology, software and science readers. Consequential ongoing investigations and documented security exposures can have high priority before their causes or outcomes are known. Use demonstrated stakes and a concrete unresolved process, not certainty of the final answer. Do not reward sensational language, article volume, popularity, an existing slot or a pin. Use the same absolute rubric for every story.",
+    "levels": [
+      {
+        "label": "none",
+        "description": "No substantiated ongoing question or relevant reader value."
+      },
+      {
+        "label": "low",
+        "description": "A narrow or speculative follow-up with little demonstrated consequence."
+      },
+      {
+        "label": "moderate",
+        "description": "A concrete unresolved question with limited or distant consequences."
+      },
+      {
+        "label": "high",
+        "description": "A consequential unresolved question with credible follow-up potential and clear value to readers now."
+      },
+      {
+        "label": "exceptional",
+        "description": "A major consequential question with a concrete near-term development or material breakthrough that makes continued coverage especially valuable now."
+      }
+    ]
+  }
+]

@@ -36,18 +36,20 @@ export type ReaderComment = {
   content: SafeCommentToken[]; contentTruncated: boolean;
   replyCount: number; repliesAvailable: boolean;
 };
-export type CommentsPage = {
+export type DiscussionCount = {storyId:number;commentCount:number|null;commentCountAt:string};
+export type CommentsPage = DiscussionCount & {
   storyId: number; parentId: number; depth: number; comments: ReaderComment[];
   page: { offset: number; limit: number; total: number; nextOffset: number | null; truncated: boolean; partial: boolean };
   fetchedAt: string; hnUrl: string;
 };
 type SafeItem = {
-  id: number; type: string; parent: number | null; kids: number[]; childCount: number; sampledAt: number;
+  id: number; type: string; parent: number | null; kids: number[]; childCount: number; commentCount:number|null; sampledAt: number;
   by: string | null; time: number | null; deleted: boolean; dead: boolean;
   content: SafeCommentToken[]; contentTruncated: boolean;
 };
 export type EditionLike = { stories: { id: number }[]; editionDate?: string; generatedAt?: string; schemaVersion?: number; layoutVersion?: number };
 export type Dependencies = {
+  readDevelopingStory?: (request: Request, env: Cloudflare.Env, threadId: string) => Promise<EditionLike | null>;
   fetcher: typeof fetch;
   now: () => number;
   readEdition: (request: Request, env: Cloudflare.Env, date: string | null, version: string | null) => Promise<EditionLike | null>;
@@ -164,6 +166,7 @@ function normalizeItem(value: unknown, id: number, sampledAt: number): SafeItem 
   return {
     id, sampledAt, type: item.type, parent: positiveId(item.parent) ? item.parent : null,
     kids: kids.slice(0, COMMENT_LIMITS.maxChildren), childCount: kids.length,
+    commentCount: Number.isSafeInteger(item.descendants)&&Number(item.descendants)>=0 ? Number(item.descendants) : null,
     by: !hidden && typeof item.by === 'string' && /^[\w-]{1,50}$/.test(item.by) ? item.by : null,
     time: positiveId(item.time) && item.time <= 253402300799 ? item.time : null,
     deleted: item.deleted === true, dead: item.dead === true,
@@ -173,7 +176,7 @@ function normalizeItem(value: unknown, id: number, sampledAt: number): SafeItem 
 function query(request: Request) {
   if (request.url.length > 2_048) throw new CommentsError('invalid_query', 'Comments query is too long.', 400);
   const params = new URL(request.url).searchParams;
-  for (const key of params.keys()) if (!['storyId', 'parentId', 'offset', 'date', 'version'].includes(key) || params.getAll(key).length !== 1) throw new CommentsError('invalid_query', 'Invalid comments query.', 400);
+  for (const key of params.keys()) if (!['storyId', 'parentId', 'offset', 'date', 'version', 'developingStory', 'countOnly'].includes(key) || params.getAll(key).length !== 1) throw new CommentsError('invalid_query', 'Invalid comments query.', 400);
   const id = (value: string | null) => {
     if (!value || !/^[1-9][0-9]{0,15}$/.test(value) || !positiveId(Number(value))) throw new CommentsError('invalid_query', 'A valid story or parent ID is required.', 400);
     return Number(value);
@@ -188,7 +191,11 @@ function query(request: Request) {
   if (date !== null && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date)) throw new CommentsError('invalid_query', 'Invalid edition date.', 400);
   const version = params.get('version');
   if (version !== null && !/^(?:e-[a-f0-9]{24}|bundled-[a-f0-9]{16})$/.test(version)) throw new CommentsError('invalid_query', 'Invalid edition version.', 400);
-  return { storyId, parentId, offset, date, version };
+  const developingStory=params.get('developingStory');
+  if(developingStory!==null&&(!/^s-[a-f0-9]{20}$/.test(developingStory)||date!==null||version!==null))throw new CommentsError('invalid_query','Invalid developing story.',400);
+  const countOnly=params.get('countOnly');
+  if(countOnly!==null&&(countOnly!=='1'||params.has('parentId')||params.has('offset')))throw new CommentsError('invalid_query','Invalid count query.',400);
+  return { storyId, parentId, offset, date, version, developingStory, countOnly:countOnly==='1' };
 }
 // Dependency injection is only for local tests; no request/env flag changes the
 // upstream host, limits or policy. Cache entries contain only sanitized HN data.
@@ -267,11 +274,13 @@ export function createCommentsService(dependencies: Partial<Dependencies> & Pick
         if (checked.size >= COMMENT_LIMITS.maxLookups) throw new CommentsError('request_limit', 'This discussion is too large to load here.');
         const result = item(id); checked.set(id, result); return result;
       };
-      const work = async (): Promise<CommentsPage> => {
-        const edition = await readEdition(request, env, parsed.date, parsed.version); checkTime();
+      const work = async (): Promise<CommentsPage|DiscussionCount> => {
+        const edition = parsed.developingStory ? await dependencies.readDevelopingStory?.(request, env, parsed.developingStory) : await readEdition(request, env, parsed.date, parsed.version); checkTime();
         if (!edition || !edition.stories.some(story => story.id === parsed.storyId)) throw new CommentsError('story_not_published', 'This story is not in the selected edition.', 404);
         const root = await load(parsed.storyId); checkTime();
         if (!root || !['story', 'poll'].includes(root.type)) throw new CommentsError('invalid_story', 'This Hacker News discussion is unavailable.', 404);
+        const discussionCount={storyId:root.id,commentCount:root.commentCount,commentCountAt:new Date(root.sampledAt).toISOString()};
+        if(parsed.countOnly)return discussionCount;
         let parent = root, depth = 0;
         if (parsed.parentId !== parsed.storyId) {
           const ancestors = new Set<number>([parsed.storyId]);
@@ -310,7 +319,7 @@ export function createCommentsService(dependencies: Partial<Dependencies> & Pick
         }));
         const next = parsed.offset + ids.length;
         return {
-          storyId: root.id, parentId: parent.id, depth, comments,
+          ...discussionCount, parentId: parent.id, depth, comments,
           page: { offset: parsed.offset, limit: COMMENT_LIMITS.pageSize, total: parent.childCount, nextOffset: next < parent.kids.length ? next : null, truncated: parent.childCount > COMMENT_LIMITS.maxChildren, partial: comments.some(comment => comment.unavailable) },
           fetchedAt: new Date(sampledAt).toISOString(), hnUrl: hnLink(root.id),
         };

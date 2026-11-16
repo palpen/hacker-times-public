@@ -46,20 +46,38 @@ export async function waitForUploadedVersion(version, {readVersion, pause = ms =
   }
 }
 
-export async function deployScheduledVersion({config, sha, readTriggers, readVersion, runWrangler, setSchedules, operation = 'deploy'}) {
+export async function deployScheduledVersion({config, sha, readTriggers, readVersion, readMigrationTag, runWrangler, setSchedules, operation = 'deploy'}) {
   if (!['deploy', 'pause', 'resume'].includes(operation)) throw new Error('Expected deploy, pause or resume.');
   if (operation === 'pause') validateStagingConfig(config); else validateScheduledConfig(config);
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Exact reviewed commit SHA required.');
+  if (typeof readMigrationTag !== 'function') throw new Error('Remote migration state readback required.');
   if (typeof readVersion !== 'function') throw new Error('Uploaded version readback required.');
   if (operation !== 'deploy' && typeof setSchedules !== 'function') throw new Error('Schedule control required.');
   validateLiveTriggers(config, await readTriggers(), {allowTransition: operation !== 'deploy'});
   const configPath = operation === 'pause' ? 'wrangler.production.jsonc' : 'wrangler.scheduled.jsonc';
-  const version = uploadedVersion(runWrangler(['versions', 'upload', '--config', configPath, '--tag', sha, '--message', 'Reviewed commit '+sha]));
-  await waitForUploadedVersion(version, {readVersion});
-  runWrangler(['versions', 'deploy', version+'@100', '--config', configPath, '--yes', '--message', 'Reviewed commit '+sha]);
+  const migrationTag=await readMigrationTag();
+  const targetTag=config.migrations.at(-1).tag;
+  const needsMigration=migrationTag!==targetTag;
+  // The only reviewed storage change adds an empty namespace. Unknown remote
+  // states, resets, deletions and migration during pause/resume fail closed.
+  if(needsMigration&&(operation!=='deploy'||migrationTag!=='production-v1'||targetTag!=='developing-news-v1'))throw new Error('Unreviewed Durable Object migration state; no deployment attempted.');
+  let version;
+  if(needsMigration){
+    const output=runWrangler(['deploy','--config',configPath,'--tag',sha,'--message','Reviewed commit '+sha]);
+    const matches=[...output.matchAll(/Current Version ID:\s*([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/g)];
+    if(matches.length!==1)throw new Error('Cannot identify migrated deployment; inspect deployment before retrying.');
+    version=matches[0][1];
+    if(await readMigrationTag()!==targetTag)throw new Error('Durable Object migration readback did not match.');
+    await waitForUploadedVersion(version,{readVersion});
+  }else{
+    version=uploadedVersion(runWrangler(['versions','upload','--config',configPath,'--tag',sha,'--message','Reviewed commit '+sha]));
+    await waitForUploadedVersion(version,{readVersion});
+    runWrangler(['versions','deploy',version+'@100','--config',configPath,'--yes','--message','Reviewed commit '+sha]);
+  }
   const deployment = JSON.parse(runWrangler(['deployments', 'status', '--config', configPath, '--json']));
   verifyDeployment(deployment, version);
-  // Only explicit publishing controls change cron. Never rewrite domains or storage.
+  // Ordinary releases preserve triggers; the additive migration reapplies the
+  // identical pre-validated routes and cron. Explicit pause/resume changes cron.
   if (operation !== 'deploy') await setSchedules(config.triggers.crons.map(cron => ({cron})));
   validateLiveTriggers(config, await readTriggers());
   return {version, deploymentId:deployment.id, createdAt:deployment.created_on, commit:sha, operation};
@@ -88,6 +106,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return value.result;
     };
     const result = await deployScheduledVersion({config, sha:process.env.GITHUB_SHA, operation,
+      readMigrationTag:async()=>(await api('/workers/services/'+config.name)).default_environment?.script?.migration_tag,
       readVersion:version=>api('/workers/scripts/'+config.name+'/versions/'+version),
       setSchedules:schedules=>api('/workers/scripts/'+config.name+'/schedules', schedules),
       readTriggers:async()=>{

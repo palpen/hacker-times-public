@@ -1,3 +1,4 @@
+import {extractPublicationDate} from './article-publication';
 import {boundedBody,boundedBytes,RequestError} from './security';
 import {CollectionError,collectionFailure} from './collection-error';
 import { publicUrl, ranking, classifyTopic, selectStories, type Candidate } from './news';
@@ -23,12 +24,13 @@ async function boundedText(response:Response){
 // Lexical defense is not DNS pinning. Use only Workers global fetch: no private network bindings.
 export function publicFetchUrl(url:string){if(!publicUrl(url))return false;return !/(^|\.)chatgpt\.site$/.test(new URL(url).hostname);}
 export async function safeFetch(url:string):Promise<{response:Response;finalUrl:string}>{let current=url;for(let n=0;n<4;n++){if(!publicFetchUrl(current))throw new Error('URL is not an allowed public web address');const response=await fetch(current,{headers:{'user-agent':USER_AGENT,'accept':'text/html,application/xhtml+xml'},redirect:'manual',signal:AbortSignal.timeout(10000)});if(response.status>=300&&response.status<400){const location=response.headers.get('location');void response.body?.cancel().catch(()=>{});if(!location)throw new Error('Redirect without location');current=new URL(location,current).href;continue;}return {response,finalUrl:current};}throw new Error('Too many redirects');}
-export async function article(url:string){try{
+export async function article(url:string,options:{fullText?:boolean}={}){try{
  const {response:res,finalUrl}=await safeFetch(url);if(!res.ok){void res.body?.cancel().catch(()=>{});return {articleStatus:'unavailable_http_'+res.status,excerpt:'',imageCandidates:[]};}if(!/text\/html|xhtml/i.test(res.headers.get('content-type')||'')){void res.body?.cancel().catch(()=>{});return {articleStatus:'non_html',excerpt:'',imageCandidates:[]};}
  const html=await boundedText(res);const articleHtml=html.match(/<article\b[^>]*>([\s\S]*?)<\/article>/i)?.[1]||html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1]||html;
- const excerpt=decode(articleHtml.replace(/<(script|style|nav|header|footer|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi,' ').replace(/<[^>]*>/g,' ')).slice(0,8500);
+ const extracted=decode(articleHtml.replace(/<(script|style|nav|header|footer|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi,' ').replace(/<[^>]*>/g,' '));
+ const excerpt=options.fullText?extracted:extracted.slice(0,8500);
  const candidate=meta(html,['og:image','twitter:image','twitter:image:src']);const resolved=candidate?new URL(candidate,finalUrl).href:'';
- return {articleStatus:'fetched',pageTitle:decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'').slice(0,500),description:meta(html,['og:description','description']).slice(0,700),publisher:meta(html,['og:site_name']).slice(0,240),excerpt,imageCandidates:resolved&&publicUrl(resolved)?[resolved]:[]};
+ return {articleStatus:'fetched',articlePublishedAt:extractPublicationDate(html,finalUrl),pageTitle:decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]||'').slice(0,500),description:meta(html,['og:description','description']).slice(0,700),publisher:meta(html,['og:site_name']).slice(0,240),excerpt,imageCandidates:resolved&&publicUrl(resolved)?[resolved]:[]};
  }catch(e){return {articleStatus:'fetch_failed',excerpt:'',imageCandidates:[]};}}
 export function frontPageIds(html:string):number[]{
  const ids:number[]=[];

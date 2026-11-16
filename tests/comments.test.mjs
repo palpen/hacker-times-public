@@ -28,6 +28,25 @@ try {
     return { service, calls, stats: () => ({ maxActive, reads }) };
   };
   const invoke = async (service, query, init) => { const response = await service(req(query, init), {}); return { response, data: init?.method === 'HEAD' ? null : await response.json() }; };
+  {
+    const threadId='s-aaaaaaaaaaaaaaaaaaaa';let reads=0;
+    const tracked=fixture({100:root([101]),101:comment(101)}, {readEdition:async()=>{throw Error('Must not consult today');},readDevelopingStory:async(_request,_env,id)=>{reads++;assert.equal(id,threadId);return {stories:[{id:100}]};}});
+    let result=await invoke(tracked.service,'storyId=100&developingStory='+threadId);assert.equal(result.response.status,200);assert.equal(result.data.comments[0].id,101);assert.equal(reads,1);
+    for(const query of ['storyId=100&developingStory=bad','storyId=100&developingStory='+threadId+'&date=2026-11-15','storyId=100&developingStory='+threadId+'&version=e-0123456789abcdef01234567'])assert.equal((await invoke(tracked.service,query)).response.status,400);
+    const missing=fixture({}, {readDevelopingStory:async()=>null});assert.equal((await invoke(missing.service,'storyId=100&developingStory='+threadId)).response.status,404);assert.equal(missing.calls.length,0);
+    const unsupported=fixture();assert.equal((await invoke(unsupported.service,'storyId=100&developingStory='+threadId)).response.status,404);assert.equal(unsupported.calls.length,0);
+  }
+  {
+    let now=Date.now(),total=122;
+    const live=fixture({}, {now:()=>now,fetcher:async url=>{assert.ok(url.endsWith('/100.json'),'count lookup fetches only the root');return json(root([101],{descendants:total}));}});
+    let result=await invoke(live.service,'storyId=100&countOnly=1');assert.equal(result.response.status,200);assert.equal(result.data.commentCount,122);assert.equal(result.data.comments,undefined);assert.equal(result.data.commentCountAt,new Date(now).toISOString());
+    total=124;now+=46_000;result=await invoke(live.service,'storyId=100&countOnly=1');assert.equal(result.data.commentCount,124,'expired counts refresh from HN');
+    for(const query of ['storyId=100&countOnly=0','storyId=100&countOnly=1&offset=0','storyId=100&countOnly=1&parentId=101'])assert.equal((await invoke(live.service,query)).response.status,400);
+    const full=fixture({100:root([101],{descendants:122}),101:comment(101)});result=await invoke(full.service,'storyId=100');assert.equal(result.data.commentCount,122);assert.equal(result.data.page.total,1,'top-level paging total is distinct from the discussion total');
+    for(const invalid of [undefined,-1,1.5,'122']){const f=fixture({100:root([],{descendants:invalid})});assert.equal((await invoke(f.service,'storyId=100&countOnly=1')).data.commentCount,null);}
+    const zero=fixture({100:root([],{descendants:0})});assert.equal((await invoke(zero.service,'storyId=100&countOnly=1')).data.commentCount,0);
+    const denied=fixture({}, {readEdition:async()=>null});assert.equal((await invoke(denied.service,'storyId=100&countOnly=1')).response.status,404);assert.equal(denied.calls.length,0);
+  }
   const flattened = tokens => tokens.map(token => token.type === 'text' ? token.text : token.children ? flattened(token.children) : '\n').join('');
   function safeTree(tokens, depth = 0) {
     assert.ok(depth < limits.tokenDepth);

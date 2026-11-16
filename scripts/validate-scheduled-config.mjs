@@ -5,14 +5,14 @@ import {isDeepStrictEqual} from 'node:util';
 import {validateDispatchContext, validateReleaseContext, validateStagingConfig} from './validate-staging-config.mjs';
 
 const flags = ['MUTATIONS_ENABLED', 'LIVE_FETCH_ENABLED', 'PUBLICATION_ENABLED',
-  'SCHEDULE_ENABLED', 'AUTO_EDITORIAL_ENABLED', 'MODEL_API_ENABLED'];
+  'SCHEDULE_ENABLED', 'AUTO_EDITORIAL_ENABLED', 'MODEL_API_ENABLED', 'DEVELOPING_NEWS_ENABLED'];
 
 export function validateScheduledConfig(config) {
   // Only activation and the half-hour cron differ from the existing reviewed
   // Worker. Preserve its namespace, budgets, model, rates and approved custom domains.
   if (!flags.every(key => config?.vars?.[key] === 'true') ||
       !isDeepStrictEqual(config?.triggers, {crons: ['*/30 * * * *']})) {
-    throw new Error('Scheduled configuration requires six explicit live flags and one half-hour cron.');
+    throw new Error('Scheduled configuration requires seven explicit live flags and one half-hour cron.');
   }
   const staging = structuredClone(config);
   for (const flag of flags) staging.vars[flag] = 'false';

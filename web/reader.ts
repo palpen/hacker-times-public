@@ -1,3 +1,5 @@
+import {installCommentLinks} from './comment-links';
+export {installCommentLinks} from './comment-links';
 import {installDiscussionCarousel} from './discussion-carousel';
 import {articleMarkup} from '../lib/markup';
 import {THEME_KEY,resolveTheme,nextTheme,type Theme} from '../lib/theme';
@@ -20,27 +22,6 @@ const attribute=(element:Element,name:string,value:string)=>element.setAttribute
 const $=(id:string)=>document.getElementById(id)!;
 const all=(selector:string)=>document.querySelectorAll(selector);
 const action=(name:string)=>document.querySelector('[data-action="'+name+'"]')!;
-type CommentModule=Pick<typeof import('./comments'),'createCommentsReader'>;
-export function installCommentLinks(stories:Story[],assetURL?:string,archiveDate?:string,commentsCssAsset?:string,publicationVersion?:string,load:(url:string)=>Promise<CommentModule>=url=>import(/* @vite-ignore */ url)){
- // Only fetch the comments module after an ordinary discussion-link click.
- let commentsModule:Promise<Awaited<ReturnType<typeof import('./comments').createCommentsReader>>>|undefined,commentClick=0;
- listen(document,'click',async event=>{
-  if(event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey||!(event.target instanceof Element))return;
-  const anchor=event.target.closest<HTMLAnchorElement>('a.discussion-link'),asset=assetURL;
-  if(!anchor||!asset||!/^\/reader-assets\/comments-[a-f0-9]{16}\.js$/.test(asset)||typeof HTMLDialogElement==='undefined'||typeof HTMLDialogElement.prototype.showModal!=='function')return;
-  const id=Number(anchor.closest<HTMLElement>('[data-story-id]')?.dataset.storyId);
-  if(!stories.some(story=>story.id===id)||anchor.href!=='https://news.ycombinator.com/item?id='+id)return;
-  event.preventDefault();const click=++commentClick,notice=$('notice');
-  const fallback=document.createElement('a');fallback.href=anchor.href;fallback.target='_blank';fallback.rel='noopener noreferrer';fallback.textContent='Read on Hacker News ↗';
-  const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Cancel';listen(cancel,'click',()=>{commentClick++;notice.hidden=true;anchor.focus();});
-  const message=document.createElement('span');message.textContent='Opening discussion…';notice.replaceChildren(message,fallback,cancel);notice.hidden=false;
-  try{
-   commentsModule??=load(asset).then(module=>module.createCommentsReader(stories,archiveDate,commentsCssAsset,publicationVersion)).catch(error=>{commentsModule=undefined;throw error;});
-   const comments=await commentsModule;if(click!==commentClick)return;notice.hidden=true;
-   if(!comments.open(id,anchor))location.href=anchor.href;
-  }catch{if(click!==commentClick)return;message.textContent='The discussion reader could not be opened.';cancel.textContent='Dismiss';}
- });
-}
 export function startReader(){
  installDiscussionCarousel();
  const data=JSON.parse($('edition-data').textContent||'{}') as {generatedAt:string;layoutVersion?:number;freshnessPolicyVersion?:number;stories:Story[];version:string;commentsAsset?:string;commentsCssAsset?:string};

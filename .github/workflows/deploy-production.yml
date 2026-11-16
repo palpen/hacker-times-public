@@ -111,7 +111,8 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
 
       # This is the only step that receives the scoped deployment credential.
-      # Verify existing domains/cron, then deploy code without rewriting triggers.
+      # Verify existing domains/cron; a first additive database migration uses
+      # wrangler deploy with those same reviewed triggers. Later releases upload versions.
       # Existing remote Worker secrets and domain bindings are preserved.
       - name: Deploy and verify the scheduled Worker version
         env:

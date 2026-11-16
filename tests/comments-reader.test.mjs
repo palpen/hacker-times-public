@@ -27,7 +27,7 @@ try{
   contains(node){return node===this||this.children.some(child=>child.contains(node));}
   getBoundingClientRect(){return {left:300,top:0,right:1000,bottom:900};}
  }
- globalThis.document={head:new Node('head'),body:new Node('body'),documentElement:new Node('html'),activeElement:null,createElement:tag=>new Node(tag),createTextNode:text=>{const node=new Node('#text');node.textContent=text;return node;},getElementById:id=>all(document.body).find(n=>n.id===id)};
+ globalThis.document={querySelectorAll:()=>[],head:new Node('head'),body:new Node('body'),documentElement:new Node('html'),activeElement:null,createElement:tag=>new Node(tag),createTextNode:text=>{const node=new Node('#text');node.textContent=text;return node;},getElementById:id=>all(document.body).find(n=>n.id===id)};
  let scroll;
  globalThis.window={scrollX:4,scrollY:360,scrollTo:value=>{scroll=value;}};
  function all(node){return [node,...node.children.flatMap(all)];}
@@ -104,6 +104,17 @@ try{
   historic.open(2,trigger);reply(queue.shift(),page(2));await tick();assert.equal(historyStack.length,2,'switching stories replaces modal entry');assert.equal(history.state.htDiscussion.storyId,2);
   historic.close();assert.equal(historyDialog.open,false);assert.equal(navigation.length,1);historic.open(3,trigger);assert.equal(historyDialog.open,false,'rapid reopen waits for pending history cleanup');historyDialog.dispatch('close');navigate();assert.equal(historyDialog.open,true);assert.equal(history.state.htDiscussion.storyId,3);reply(queue.shift(),page(3));await tick();assert.equal(historyStack.length,2);historic.close();navigate();assert.equal(historyIndex,0);assert.equal(navigation.length,0);assert.equal(historyDialog.open,false);
  }finally{globalThis.history=originalHistory;window.addEventListener=originalListen;}
+ // Developing stories reuse the same reader without inventing a publication count.
+ const developing='s-aaaaaaaaaaaaaaaaaaaa';let developingURL;
+ const tracked=await createCommentsReader([{id:88,headline:'An ongoing investigation'}],undefined,css,undefined,{developingStory:developing,fetcher:async url=>{developingURL=new URL(url,'https://example.com');return {ok:true,json:async()=>({...page(88),commentCount:122,commentCountAt:'2026-11-16T02:00:00.000Z'})};}});
+ assert.equal(tracked.open(88,trigger),true);await tick();
+ const trackedDialog=findAll(document.body,'comments-dialog').at(-1);
+ assert.equal(developingURL.searchParams.get('developingStory'),developing);assert.equal(developingURL.searchParams.has('version'),false);
+ assert.equal(find(trackedDialog,'comments-count').textContent,'122 comments');assert.equal(find(trackedDialog,'comments-snapshot').hidden,false);
+ assert.equal(find(trackedDialog,'comments-story-title').textContent,'An ongoing investigation');assert.equal(findAll(trackedDialog,'comment-node').length,1);
+ tracked.close();assert.equal(trackedDialog.open,false);assert.equal(document.activeElement,trigger);
+ await assert.rejects(createCommentsReader([],undefined,css,undefined,{developingStory:'arbitrary'}));
+ await assert.rejects(createCommentsReader([],'2026-11-15',css,undefined,{developingStory:developing}));
  // Native dialog unavailable: no interception/controller request is attempted.
  const originalCreate=document.createElement;document.createElement=tag=>{const n=originalCreate(tag);if(tag==='dialog')n.showModal=undefined;return n;};assert.equal((await createCommentsReader(stories,undefined,css)).open(1,trigger),false);assert.equal(queue.length,0);
 

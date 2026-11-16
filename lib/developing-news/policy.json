@@ -1,0 +1,69 @@
+{
+  "version": "story-tracking-v2",
+  "mode": "propose_only",
+  "purpose": "Select the small Story so far roster while preserving permanent story pages.",
+  "schedule": {
+    "assess_every_hours": 24,
+    "match_articles_on_ingest": true,
+    "publish_only_material_changes": true
+  },
+  "roster": {
+    "initial_target": 3,
+    "maximum_active": 5,
+    "minimum_active_days": 7,
+    "quiet_after_days_without_material_change": 30,
+    "upcoming_event_window_days": 7,
+    "distant_event_days": 30,
+    "minimum_hours_between_promotions": 24,
+    "bootstrap_exception": "The first successful selection may admit up to three stories together.",
+    "promotion_definition": "Any activation, revival, or replacement after bootstrap. Quieting does not reset the promotion clock.",
+    "archive_age_limit_days": null,
+    "delete_quiet_story_pages": false
+  },
+  "provisional_thresholds": {
+    "choice_probability": 0.7,
+    "resolved_probability": 0.9,
+    "plausible_followup_probability": 0.6,
+    "minimum_priority": 1.5,
+    "extra_slot_priority": 3.25,
+    "replacement_priority_margin": 0.75,
+    "priority_confidence": 0.5,
+    "note": "V2 uses selected option probability for choice gates, not the separate confidence field. Priority confidence is used only for admission/replacement, never for resolution. Provisional values require evaluation."
+  },
+  "limits": {
+    "maximum_shortlisted_candidates": 5,
+    "maximum_evidence_items_per_story": 6,
+    "maximum_excerpt_characters": 1200,
+    "maximum_request_bytes": 131072,
+    "maximum_collection_age_hours": 36
+  },
+  "precedence": [
+    "Explicit exclusion prevents admission and removes an active story; a story cannot be pinned and excluded together.",
+    "A pin protects an already active story from automatic quieting and replacement, including resolution.",
+    "Missing or insufficient evidence that the underlying event exists preserves an active story and defers a candidate. An unknown investigation outcome is not missing evidence of the investigation.",
+    "A confidently resolved question can become quiet before seven days, regardless of priority, novelty or follow-up uncertainty.",
+    "Otherwise an active story has a seven-day minimum before quieting or replacement.",
+    "A material development keeps a story active; an approaching verified event also protects it from quieting and replacement.",
+    "Quiet a story after thirty days without a material change, or when its only expected event is more than thirty days away.",
+    "Revive an old story only for a material development in that same story; reuse its identifier and page.",
+    "Fill toward three with qualifying stories; use the fourth and fifth slots only for higher-priority stories.",
+    "At capacity, replace the weakest eligible story only when the candidate clears the priority margin and promotion clock.",
+    "New candidates do not require novelty against a historical baseline. Quiet-story revival and stale-story removal still require a usable novelty assessment."
+  ],
+  "model_authority": {
+    "may_assess": [
+      "evidence_sufficiency",
+      "question_status",
+      "plausible_followup",
+      "latest_development",
+      "editorial_priority"
+    ],
+    "may_not_execute": [
+      "change_roster",
+      "publish_prose",
+      "delete_story",
+      "fetch_sources",
+      "spend_without_budget_reservation"
+    ]
+  }
+}

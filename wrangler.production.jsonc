@@ -17,6 +17,10 @@
       {
         "name": "NEWSROOM",
         "class_name": "Newsroom"
+      },
+      {
+        "name": "DEVELOPING_NEWS",
+        "class_name": "DevelopingNews"
       }
     ]
   },
@@ -25,6 +29,12 @@
       "tag": "production-v1",
       "new_sqlite_classes": [
         "Newsroom"
+      ]
+    },
+    {
+      "tag": "developing-news-v1",
+      "new_sqlite_classes": [
+        "DevelopingNews"
       ]
     }
   ],
@@ -40,7 +50,8 @@
     "MODEL_MONTHLY_LIMIT_MICRO_USD": "5000000",
     "LIVE_FETCH_ENABLED": "false",
     "PUBLICATION_ENABLED": "false",
-    "SCHEDULE_ENABLED": "false"
+    "SCHEDULE_ENABLED": "false",
+    "DEVELOPING_NEWS_ENABLED": "false"
   },
   "triggers": {
     "crons": []
