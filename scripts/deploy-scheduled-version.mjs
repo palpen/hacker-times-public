@@ -3,7 +3,7 @@ import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {validateScheduledConfig} from './validate-scheduled-config.mjs';
-import {validateDispatchContext, validateStagingConfig} from './validate-staging-config.mjs';
+import {validateDispatchContext, validateReleaseContext, validateStagingConfig} from './validate-staging-config.mjs';
 
 export function validateLiveTriggers(config, {readers, schedules, subdomain}, {allowTransition = false} = {}) {
   const expected = [...config.routes.map(route => 'https://'+route.pattern), 'https://hacker-times-production.pspenano.workers.dev'].sort();
@@ -50,9 +50,9 @@ export async function deployScheduledVersion({config, sha, readTriggers, runWran
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    validateDispatchContext(process.env);
     const operation = process.argv[2];
     if (process.argv.length !== 3 || !['deploy', 'pause', 'resume'].includes(operation)) throw new Error('Usage: node scripts/deploy-scheduled-version.mjs deploy|pause|resume');
+    if (operation === 'deploy') validateReleaseContext(process.env); else validateDispatchContext(process.env);
     const configPath = operation === 'pause' ? '../wrangler.production.jsonc' : '../wrangler.scheduled.jsonc';
     const config = JSON.parse(readFileSync(new URL(configPath, import.meta.url), 'utf8'));
     if (operation === 'pause') validateStagingConfig(config); else validateScheduledConfig(config);

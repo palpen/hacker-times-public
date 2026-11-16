@@ -20,9 +20,11 @@ The hosting manifest intentionally has no `project_id`. Register and configure y
 
 `main` is the production release branch. **Check production** runs automatically
 on pull requests and pushes to `main`; it tests and builds without deployment credentials.
-To release, open GitHub Actions, select **Deploy production**, choose `main`, and
-click **Run workflow**. The workflow validates that exact commit, deploys it to
-Cloudflare, and verifies the active version and public readers.
+Every merge or push to `main` also starts **Deploy production** automatically.
+It validates that exact commit, deploys it to Cloudflare only after all checks pass,
+and verifies the active version and public readers. No deployment button is needed.
+For a manual retry, open GitHub Actions → **Deploy production** → **Run workflow**
+and choose `main`.
 
 **Pause automatic publishing** and **Resume automatic publishing** are separate
 manual workflows on `main`. They affect the live site, preserve its saved editions,

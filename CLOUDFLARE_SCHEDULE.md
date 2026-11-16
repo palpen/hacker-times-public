@@ -25,8 +25,10 @@ longer accepted by production workflows. **Check production** runs automatically
 on pull requests and pushes to `main`, without an environment or deployment secrets.
 It runs the Node tests, TypeScript, backend/deployment lint, and a Worker dry-run.
 
-For a normal release, open GitHub Actions → **Deploy production** → **Run workflow**
-and choose `main`. Only manual dispatches from this repository's `main` are allowed.
+Every merge or push to `main` starts **Deploy production** automatically. Its
+validation job must pass before its deployment job can run; a failed check leaves
+the existing deployment in place. Pull requests and other branches cannot deploy.
+The manual **Run workflow** option remains available on `main` for retries.
 A separate validation job checks the exact commit without credentials. A fresh
 runner then deploys that same commit using the `production` environment, whose
 branch policy must permit only `main`. Only the final deployment step receives

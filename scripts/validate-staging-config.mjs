@@ -41,12 +41,22 @@ export function validateStagingConfig(config) {
   }
 }
 
+function approvedContext(env, events) {
+  return events.includes(env.GITHUB_EVENT_NAME) &&
+    env.GITHUB_REPOSITORY === 'palpen/hacker-times-public' &&
+    env.GITHUB_REF === 'refs/heads/main' &&
+    /^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '');
+}
+
 export function validateDispatchContext(env) {
-  if (env.GITHUB_EVENT_NAME !== 'workflow_dispatch' ||
-      env.GITHUB_REPOSITORY !== 'palpen/hacker-times-public' ||
-      env.GITHUB_REF !== 'refs/heads/main' ||
-      !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '')) {
+  if (!approvedContext(env, ['workflow_dispatch'])) {
     throw new Error('Production operations require a manual dispatch from the approved repository main branch.');
+  }
+}
+
+export function validateReleaseContext(env) {
+  if (!approvedContext(env, ['push', 'workflow_dispatch'])) {
+    throw new Error('Production releases require a push or manual dispatch from the approved repository main branch.');
   }
 }
 
