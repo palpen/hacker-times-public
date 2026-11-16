@@ -64,8 +64,7 @@ export async function editorCall(name:string,args:Record<string,unknown>,request
   const previous=base.publication.current.edition;let edition:Edition;
   if(snapshot.leadPlan)await verifyLeadPlan(env.BUCKET!,base.publication,snapshot);
   try{edition=validateEdition(input,previous,snapshot);}catch{throw new RequestError('Edition does not match required fields or source snapshot');}
-  if(snapshot.leadPlan&&snapshot.leadPlan.baseState.active.articleKey===snapshot.leadPlan.nextState.active.articleKey){
-   if(edition.stories[0].summarySource==='unavailable'&&previous.stories[0].headline!==edition.stories[0].title)throw new RequestError('Unavailable incumbent conflicts with preserved headline; reuse verified copy or stop for review.');
+  if(snapshot.leadPlan&&snapshot.leadPlan.baseState.active.articleKey===snapshot.leadPlan.nextState.active.articleKey&&edition.stories[0].summarySource!=='unavailable'){
    edition.stories[0].headline=previous.stories[0].headline;
   }
   if(name==='validate_edition_internal')return {ok:true,valid:true,published:false,generatedAt:edition.generatedAt,stories:edition.stories.length,basePublicationVersion:base.publication.current.version};

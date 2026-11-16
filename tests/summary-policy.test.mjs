@@ -14,7 +14,7 @@ try{
  const unavailable={...story,headline:source.title,summary:'',shortSummary:'',summarySource:'unavailable'};
  assert.equal(validate(unavailable).stories[0].headline,source.title);assert.equal(summaryText(unavailable),'Summary unavailable');assert.equal(summaryText(unavailable,true),'Summary unavailable');
  assert.throws(()=>validate({...unavailable,title:'Forged title',headline:'Forged title'}));
- const previous={generatedAt,stories:[story]};assert.throws(()=>validate(unavailable,snapshot,previous),/incumbent conflicts/);
+ const previous={generatedAt,stories:[story]};assert.deepEqual(validate(unavailable,snapshot,previous).stories[0],validate(unavailable).stories[0]);
  assert.equal(validate(story,snapshot,previous).stories[0].headline,story.headline);
  assert.equal(validate(unavailable,snapshot,{...previous,stories:[{...story,headline:source.title}]}).stories[0].headline,source.title);
  const legacy={...story};delete legacy.summarySource;delete legacy.shortSummary;const old={...snapshot};delete old.summaryPolicyVersion;
@@ -31,5 +31,5 @@ try{
   const edition={generatedAt,layoutVersion,stories,candidateCount:stories.length,ranking:'Pinned test'};const html=renderEdition(edition,'test');const articles=[...html.matchAll(/<article\b[\s\S]*?<\/article>/g)].map(m=>m[0]);assert.equal(articles.length,stories.length);assert.ok(articles.every(a=>a.includes('class="deck"')));assert.ok(articles.filter(a=>a.includes('rail-card')).every(a=>a.includes('Compact verified sentence')));
   const bad=renderEdition({...edition,stories:stories.map(s=>({...s,summary:evil,shortSummary:evil}))},'test');assert.ok(!bad.includes('<script>alert'));assert.ok(bad.includes('\\u003c/script\\u003e'));
  }
- console.log('PASS: summary contracts, source modes, bounds, unavailable title, incumbent conflict, legacy snapshots/omissions, all compact slots and XSS escaping. Source quality remains editorial review, not automatic semantic proof.');
+ console.log('PASS: summary contracts, source modes, bounds, unavailable incumbent title, legacy snapshots/omissions, all compact slots and XSS escaping. Source quality remains editorial review, not automatic semantic proof.');
 }finally{fs.rmSync(tmp,{recursive:true,force:true});}
