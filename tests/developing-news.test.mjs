@@ -67,6 +67,9 @@ test('paid calls reserve first, cache success, never replay uncertain requests, 
  try{const request={model:'gpt-6-luna',input:'sample'};await api.paidRequest(env,'decisions',request,()=>{});await api.paidRequest(env,'decisions',request,()=>{});assert.equal(requests,1);
   globalThis.fetch=async()=>{requests++;throw Error('Connection lost');};await assert.rejects(()=>api.paidRequest(env,'decisions',{input:'different'},()=>{}));await assert.rejects(()=>api.paidRequest(env,'decisions',{input:'different'},()=>{}),/replay/);assert.equal(requests,2);
   await assert.rejects(()=>api.paidRequest(env,'decisions',{input:'x'.repeat(200001)},()=>{}),/no truncation/);assert.equal(requests,2);
+  globalThis.fetch=async()=>new Response('Sensitive provider body must not enter diagnostics',{status:403});
+  await assert.rejects(()=>api.paidRequest(env,'decisions',{input:'denied'},()=>{}),error=>error instanceof api.ProviderFailure&&error.endpoint==='decisions'&&error.httpStatus===403&&!error.message.includes('Sensitive'));
+  await assert.rejects(()=>api.paidRequest(env,'decisions',{input:'denied'},()=>{}),/replay/);
  }finally{globalThis.fetch=async()=>{throw Error('Live network forbidden');};}
 });
 test('reader copy escapes untrusted strings, links permanent pages and hides private evidence',()=>{

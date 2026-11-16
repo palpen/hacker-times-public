@@ -3,7 +3,7 @@ import {call} from '../production/runner';
 import {RequestError} from '../security';
 import {DevelopingStore} from './store';
 import {collectEvidence,discoverFollowup} from './source';
-import {assessArticle} from './model';
+import {assessArticle,ProviderFailure} from './model';
 import {rotate} from './lifecycle';
 import {publicThread,submittedAt,type Work} from './types';
 import {policy} from './policy.mjs';
@@ -98,7 +98,7 @@ export class DevelopingNews {
     if(!run.results.some(r=>r.thread.id===assessment.thread.id)){run.results.push(assessment);run.processed.push(article.id);}
    }catch(error){
     if(error instanceof RequestError&&error.status===409&&error.message.startsWith('Another bounded runner')){await this.state.storage.setAlarm(Date.now()+60_000);return;}
-    const failure={articleId:work.article.id,phase,reason:error instanceof RequestError&&error.status===429?'budget_unavailable':phase==='source'?'source_unavailable':'assessment_failed'};
+    const failure={articleId:work.article.id,phase,reason:error instanceof RequestError&&error.status===429?'budget_unavailable':phase==='source'?'source_unavailable':'assessment_failed',...(error instanceof ProviderFailure?{provider:{endpoint:error.endpoint,kind:error.kind,httpStatus:error.httpStatus}}:{})};
     run.failures=[...(run.failures??[]),failure];
     console.log(JSON.stringify({event:'hacker_times.developing_news',outcome:'candidate_failed',...failure}));
     if(error instanceof RequestError&&error.status===429){run.budgetAvailable=false;run.queue=[];}
