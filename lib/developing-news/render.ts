@@ -4,7 +4,7 @@ import {esc,link} from '../markup';
 import {editionAssets} from '../edition-assets';
 import {themeInitScript} from '../theme';
 import type {PublicNews,PublicThread,Update} from './types';
-export const developingIntroduction="Stories we're following that are still unfolding. Stories are checked daily and any updates are shared here.";
+export const developingIntroduction="Stories we're following that are still unfolding. Stories are checked hourly and any updates are shared here.";
 const date=(at:string)=>new Date(at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'America/Toronto'});
 const time=(at:string)=>`<time datetime="${esc(at)}">${esc(date(at))}</time>`;
 function articleDate(at:string|null|undefined){const valid=publicationDate(at);return valid?`Article published <time datetime="${esc(valid)}">${new Date(valid.slice(0,10)+'T12:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'})}</time>`:'Article publication date unavailable';}

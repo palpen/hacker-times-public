@@ -6,6 +6,12 @@ import {collectEvidence,discoverFollowup} from './source';
 import {assessArticle} from './model';
 import {rotate} from './lifecycle';
 import {publicThread,submittedAt,type Work} from './types';
+import {policy} from './policy.mjs';
+
+const INTERVAL=policy.schedule.assess_every_hours*3600_000;
+export function assessmentDue(lastRunAt:string|null,now=Date.now()){
+ return !lastRunAt||Math.floor(Date.parse(lastRunAt)/INTERVAL)<Math.floor(now/INTERVAL);
+}
 
 export class DevelopingNews {
  private store:DevelopingStore;
@@ -14,6 +20,8 @@ export class DevelopingNews {
  private enabled(){return this.env.DEVELOPING_NEWS_ENABLED==='true'&&this.env.MUTATIONS_ENABLED==='true'&&this.env.LIVE_FETCH_ENABLED==='true'&&this.env.MODEL_API_ENABLED==='true'&&this.env.SCHEDULE_ENABLED==='true'&&this.env.PUBLICATION_ENABLED==='true';}
  async fetch(request:Request):Promise<Response>{
   const url=new URL(request.url);
+  // Internal binding only: the reader router never forwards this endpoint.
+  if(request.method==='GET'&&url.pathname==='/status')return Response.json({enabled:this.enabled(),roster:this.store.roster(),run:this.store.runSummary(),lastRun:this.store.get('last-run'),lastPlan:this.store.get('last-plan'),storage:this.store.diagnostics(),nextCheckDue:assessmentDue(this.store.roster().lastRunAt)});
   if(request.method==='GET'&&url.pathname==='/comments-context'){
    const threadId=url.searchParams.get('threadId')??'',storyId=Number(url.searchParams.get('storyId'));
    if(!/^s-[a-f0-9]{20}$/.test(threadId)||!Number.isSafeInteger(storyId)||storyId<=0)return new Response('Invalid query',{status:400});
@@ -49,7 +57,7 @@ export class DevelopingNews {
  private async step(){
   const roster=this.store.roster();let run=this.store.run();
   if(!run){
-   if(roster.lastRunAt&&Date.now()-Date.parse(roster.lastRunAt)<24*3600_000){await this.state.storage.deleteAlarm();return;}
+   if(!assessmentDue(roster.lastRunAt)){await this.state.storage.deleteAlarm();return;}
    const publication=await call(this.env,'edition') as Publication;
    if(Date.now()-Date.parse(publication.edition.generatedAt)>36*3600_000)throw Error('Stale discovery');
    const active=this.store.active(),asOf=new Date().toISOString();
@@ -61,13 +69,14 @@ export class DevelopingNews {
   }
   const status=await call(this.env,'status') as {safetyStop?:unknown;runner?:{leaseExpiresAt:number|null}};
   if(status.safetyStop)throw Error('Editorial hold');
-  // Give the front-page publisher priority. Do not consume the daily shortlist
+  // Give the front-page publisher priority. Do not consume the hourly shortlist
   // merely because its storage lease is busy for a few minutes.
   if(status.runner?.leaseExpiresAt&&status.runner.leaseExpiresAt>Date.now()){
    await this.state.storage.setAlarm(status.runner.leaseExpiresAt+1000);return;
   }
   if(run.queue.length){
    const work=run.queue[0];
+   let phase='source';
    try{
     let article=work.article;
     const existing=work.threadId?this.store.thread(work.threadId):null;
@@ -82,12 +91,16 @@ export class DevelopingNews {
     // restart cannot change the request hash and replay an uncertain call.
     Object.assign(work,{article,evidence,matches:matches.slice(0,5),assessmentAt:work.assessmentAt??new Date().toISOString()});
     this.store.set('run',run);
+    phase='assessment';
     const assessment=await assessArticle(this.env,evidence,work.matches!,work.assessmentAt!,(key,request,response)=>this.store.journal(key,request,response));
     // A follow-up about another event must not mark an active thread refreshed.
-    // It may become one of the daily new candidates instead.
+    // It may become one of the hourly new candidates instead.
     if(!run.results.some(r=>r.thread.id===assessment.thread.id)){run.results.push(assessment);run.processed.push(article.id);}
    }catch(error){
     if(error instanceof RequestError&&error.status===409&&error.message.startsWith('Another bounded runner')){await this.state.storage.setAlarm(Date.now()+60_000);return;}
+    const failure={articleId:work.article.id,phase,reason:error instanceof RequestError&&error.status===429?'budget_unavailable':phase==='source'?'source_unavailable':'assessment_failed'};
+    run.failures=[...(run.failures??[]),failure];
+    console.log(JSON.stringify({event:'hacker_times.developing_news',outcome:'candidate_failed',...failure}));
     if(error instanceof RequestError&&error.status===429){run.budgetAvailable=false;run.queue=[];}
     else if(!work.threadId)this.store.defer(work.article.id);
     run.failed.push(work.threadId??String(work.article.id));
@@ -100,12 +113,19 @@ export class DevelopingNews {
   // Active jobs can discover a new thread, but policy shortlist remains five.
   const active=this.store.active(),activeIds=new Set(active.map(t=>t.id));let candidates=0;
   run.results=run.results.filter(a=>activeIds.has(a.thread.id)||++candidates<=5);
-  if(!active.length&&!run.results.length){this.store.set('run',null);this.store.set('roster',{...roster,lastRunAt:run.asOf});await this.state.storage.deleteAlarm();return;}
+  const summary={at:run.asOf,assessed:run.results.length,deferred:run.failed.length,failures:run.failures??[],budgetAvailable:run.budgetAvailable!==false};
+  if(!active.length&&!run.results.length){
+   const outcome=run.failed.length?'assessment_unavailable':'no_candidates';
+   this.state.storage.transactionSync(()=>{this.store.set('last-run',{...summary,outcome});this.store.set('run',null);this.store.set('roster',{...roster,lastRunAt:run.asOf});this.store.prune(Date.now());});
+   console.log(JSON.stringify({event:'hacker_times.developing_news',...summary,outcome,active:0}));
+   await this.state.storage.deleteAlarm();return;
+  }
   const next=await rotate(roster,active,run);
   this.state.storage.transactionSync(()=>{
    for(const t of next.threads)this.store.save(t);
    if(run.budgetAvailable!==false&&run.discoveryOk)for(const id of run.processed)this.store.markSeen(id,run!.asOf);
    this.store.set('roster',next.roster);this.store.set('last-plan',{at:run!.asOf,plan:next.plan,failed:run!.failed});this.store.set('run',null);this.store.prune(Date.now());
+   this.store.set('last-run',{...summary,outcome:'completed'});
   });
   console.log(JSON.stringify({event:'hacker_times.developing_news',outcome:'completed',active:next.plan.next_active_ids.length,assessed:run.results.length,deferred:run.failed.length}));
   await this.state.storage.deleteAlarm();
