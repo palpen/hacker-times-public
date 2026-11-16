@@ -17,7 +17,7 @@ export class CollectionError extends RequestError{
 }
 export function collectionFailure(error:unknown,phase:CollectionDetails['phase'],message:string):CollectionError{
  if(error instanceof CollectionError)return error;
- const reason=error instanceof Error&&/too many subrequests/i.test(error.message)?'request_limit':
+ const reason=error instanceof Error&&/too many subrequests|^fetch_request_limit$/i.test(error.message)?'request_limit':
   error instanceof SyntaxError||error instanceof RequestError&&error.status===413?'payload':'transport';
  return new CollectionError(message,{phase,reason,upstreamStatus:null});
 }
