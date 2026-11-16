@@ -20,7 +20,7 @@ export async function collectSource(s:Snapshot,id:number):Promise<Source>{
   const excerpt=typeof item.text==='string'?item.text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,8500):'';
   source={id,generatedAt:s.generatedAt,kind:excerpt?'hn_post':'unavailable',excerpt,description:'',url:selected.url,fetchedAt:new Date().toISOString(),status:excerpt?'hn_self_post':'source_unavailable'};
  }else{
-  const result=await article(selected.url);
+  const result=await article(selected.url,{originalTitle:selected.title});
   // A publisher outage must not pin the entire newsroom to this edition.
   // Preserve the selected link/title with no summary, just as for rate limits.
   // Sources are scoped to this snapshot, so the next edition fetches again.
