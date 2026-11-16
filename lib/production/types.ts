@@ -2,6 +2,8 @@ import type {Candidate, Edition, SourceSnapshot} from '../contracts';
 import type {LeadObservation, BalancedLeadResult} from '../lead-policy';
 export interface ProductionEnv {
   NEWSROOM: DurableObjectNamespace;
+  DEVELOPING_NEWS?: DurableObjectNamespace;
+  DEVELOPING_NEWS_ENABLED?: string;
   MUTATIONS_ENABLED?: string;
   LIVE_FETCH_ENABLED?: string;
   PUBLICATION_ENABLED?: string;

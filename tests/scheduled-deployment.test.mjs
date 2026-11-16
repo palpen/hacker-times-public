@@ -64,14 +64,14 @@ test('code releases refuse changed domains, schedules and incomplete version act
   for (const mutate of [value=>value.readers.pop(), value=>value.readers[0].origin='https://other.example', value=>value.readers[0].version='e-'+'b'.repeat(24), value=>value.readers[0].health.publicationEnabled=false, value=>value.schedules.schedules.push({cron:'* * * * *'}), value=>value.subdomain.enabled=false]) {
     const changed=triggers();mutate(changed);assert.throws(()=>validateLiveTriggers(config,changed));
     let calls=0;
-    await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>changed,runWrangler:()=>{calls++;}}));
+    await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>changed,runWrangler:()=>{calls++;}}));
     assert.equal(calls,0);
   }
   assert.throws(()=>uploadedVersion('No upload confirmation'));
   assert.throws(()=>verifyDeployment({versions:[{version_id:version,percentage:50}]},version));
   assert.throws(()=>verifyDeployment({versions:[{version_id:'wrong',percentage:100}]},version));
   const calls=[];let reads=0;
-  const result=await deployScheduledVersion({config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>{reads++;return triggers();},runWrangler:args=>{
+  const result=await deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>{reads++;return triggers();},runWrangler:args=>{
     calls.push(args);
     return args.includes('upload')?'Worker Version ID: '+version:args.includes('status')?JSON.stringify({versions:[{version_id:version,percentage:100}],id:'release-id'}):'';
   }});
@@ -95,7 +95,7 @@ test('pause and resume change only the reviewed cron after activating the exact 
     const initialState = operation === 'pause' ? triggers : pausedTriggers;
     for (const initial of [initialState, finalState]) {
       const events = []; let reads = 0;
-      const result = await deployScheduledVersion({config:target,readVersion:versionDetails, operation, sha:'a'.repeat(40),
+      const result = await deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config:target,readVersion:versionDetails, operation, sha:'a'.repeat(40),
         readTriggers:async()=>++reads === 1 ? initial() : finalState(),
         runWrangler:args=>{
           events.push(args);
@@ -121,13 +121,13 @@ test('publishing controls reject unexpected live state and verify the requested 
     return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
   };
   for (const operation of ['pause', 'resume']) {
-    await assert.rejects(deployScheduledVersion({config:operation === 'pause' ? pausedConfig : config, readVersion:versionDetails,
+    await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config:operation === 'pause' ? pausedConfig : config, readVersion:versionDetails,
       operation, sha:'a'.repeat(40), readTriggers:async()=>unexpected, runWrangler, setSchedules:async()=>{mutations++;}}));
   }
   assert.equal(mutations, 0);
-  await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails, operation:'resume', sha:'a'.repeat(40),
+  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails, operation:'resume', sha:'a'.repeat(40),
     readTriggers:async()=>pausedTriggers(), runWrangler, setSchedules:async()=>{}}), /do not match/);
-  await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails, sha:'a'.repeat(40),
+  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails, sha:'a'.repeat(40),
     readTriggers:async()=>pausedTriggers(), runWrangler}), /do not match/);
 });
 
@@ -224,7 +224,7 @@ test('uploaded version visibility is read back with bounded retries for Cloudfla
 
 test('a failed uploaded-version readback cannot activate a version or change schedules', async () => {
   const calls=[];
-  await assert.rejects(deployScheduledVersion({config, sha:'a'.repeat(40),
+  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config, sha:'a'.repeat(40),
     readTriggers:async()=>triggers(),
     readVersion:async()=>{throw new Error('readback failed');},
     runWrangler:args=>{calls.push(args);return 'Worker Version ID: '+version;},
@@ -232,4 +232,21 @@ test('a failed uploaded-version readback cannot activate a version or change sch
   }), /readback failed/);
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0].slice(0,2),['versions','upload']);
+});
+
+
+test('first Developing News release applies only the reviewed additive migration',async()=>{
+ const calls=[];let tag='production-v1';
+ const result=await deployScheduledVersion({config,sha:'a'.repeat(40),readVersion:versionDetails,readMigrationTag:async()=>tag,readTriggers:async()=>triggers(),runWrangler:args=>{
+  calls.push(args);if(args[0]==='deploy'){tag='developing-news-v1';return 'Current Version ID: '+version;}
+  return JSON.stringify({versions:[{version_id:version,percentage:100}],id:'migrated-release'});
+ }});
+ assert.equal(result.version,version);assert.equal(calls[0][0],'deploy');assert.equal(calls.some(args=>args.includes('upload')),false);
+ for(const remoteTag of [undefined,'unknown','future-migration']){
+  await assert.rejects(deployScheduledVersion({config,sha:'a'.repeat(40),readVersion:versionDetails,readMigrationTag:async()=>remoteTag,readTriggers:async()=>triggers(),runWrangler:()=>assert.fail('must not deploy')}),/Unreviewed/);
+ }
+ await assert.rejects(deployScheduledVersion({config:pausedConfig,operation:'pause',sha:'a'.repeat(40),readVersion:versionDetails,readMigrationTag:async()=> 'production-v1',readTriggers:async()=>triggers(),setSchedules:async()=>{},runWrangler:()=>assert.fail('must not migrate on pause')}),/Unreviewed/);
+ let attempts=0;
+ await assert.rejects(deployScheduledVersion({config,sha:'a'.repeat(40),readVersion:versionDetails,readMigrationTag:async()=> 'production-v1',readTriggers:async()=>triggers(),runWrangler:()=>{attempts++;return 'Current Version ID: '+version;}}),/migration readback/);
+ assert.equal(attempts,1,'uncertain migration is never retried automatically');
 });

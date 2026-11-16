@@ -1,0 +1,28 @@
+/* Developing News: newspaper rules, generous type, no dashboard chrome. */
+.developing-section{border-top:2px solid var(--ink);padding:26px 0 32px}
+.developing-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:24px}
+.developing-heading h2,.developing-earlier h2{font-family:var(--serif);font-size:31px;line-height:1.15;letter-spacing:-.65px;margin:0 0 10px}
+.developing-heading p,.developing-intro{font-size:17px;line-height:1.5;color:var(--deck);max-width:620px}
+.developing-follow{font-family:var(--sans);font-size:13px;display:inline-flex;align-items:center;gap:10px;min-height:44px}
+.developing-follow{font-weight:700}
+.developing-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.developing-card{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line);padding-right:24px}
+.developing-card:nth-child(3n),.developing-card:last-child{border-right:0;padding-right:0}
+.developing-meta{font-family:var(--sans);font-size:11px;line-height:1.6;color:var(--muted);margin-bottom:10px}
+.developing-card h3{font-size:23px;line-height:1.18;letter-spacing:-.3px;margin:0 0 12px}
+.developing-card>p:not(.developing-meta){font-size:16px;line-height:1.5;color:var(--deck);margin-bottom:14px}
+.developing-empty{padding:14px 0;color:var(--muted);font-size:16px}
+#developing-content>.developing-section{border-top:0;padding-top:40px}
+#developing-content>.developing-section .developing-heading h2{font-size:42px}
+.developing-earlier{border-top:1px solid var(--strong-line);padding:30px 0}.developing-earlier .developing-grid{margin-top:25px;row-gap:32px}
+.developing-story{padding:18px 0 40px}
+.developing-story-heading{max-width:900px;margin-bottom:40px}.developing-story-heading h2{font-size:48px;line-height:1.08;letter-spacing:-1.2px;margin:8px 0 22px;text-wrap:balance}
+.developing-standfirst{font-size:21px;line-height:1.5;color:var(--deck);max-width:800px}
+.developing-story-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:60px;border-top:2px solid var(--ink);padding-top:25px}
+.developing-timeline h3,.developing-context h3{font-family:var(--sans);font-size:14px;line-height:1.5;margin:0 0 20px}
+.developing-timeline ol{list-style:none;margin:0;padding:0}.developing-timeline li{position:relative;border-left:1px solid var(--strong-line);padding:0 0 32px 23px;margin-left:4px}.developing-timeline li:before{content:'';position:absolute;width:7px;height:7px;background:var(--ink);border-radius:50%;left:-4px;top:6px}
+.developing-timeline li>p:not(.developing-meta){font-size:19px;line-height:1.55}
+.developing-source{font-family:var(--sans);font-size:12px;line-height:1.5;color:var(--muted);margin-top:8px}.developing-source>a{display:inline-flex;align-items:center;min-height:44px;text-decoration:underline;text-underline-offset:3px}.developing-source .story-meta{margin-top:4px}
+.developing-context{padding-left:26px;border-left:1px solid var(--line);align-self:start}.developing-context>p{font-size:18px;line-height:1.5}.developing-context .developing-note{font-family:var(--sans);font-size:13px;line-height:1.6;color:var(--muted);margin-top:24px}
+.developing-card,.developing-story{overflow-wrap:anywhere}
+@media(max-width:680px){.developing-section{padding:22px 0 26px}.developing-heading{display:block;margin-bottom:20px}.developing-heading h2,.developing-earlier h2{font-size:27px}.developing-grid{grid-template-columns:1fr;gap:22px}.developing-card,.developing-card:nth-child(3n){border-right:0;border-bottom:1px solid var(--line);padding:0 0 16px}.developing-card:last-child{border:0;padding:0}.developing-card h3{font-size:25px}.developing-card>p:not(.developing-meta){font-size:17px;line-height:1.58}.developing-meta{font-size:12px}.developing-story-heading h2{font-size:35px;line-height:1.15;letter-spacing:-.7px}.developing-standfirst{font-size:19px}.developing-story-layout{display:flex;flex-direction:column;gap:30px}.developing-context{order:-1;border-left:0;border-bottom:1px solid var(--line);padding:0 0 24px}.developing-story-heading{margin-bottom:28px}#developing-content>.developing-section .developing-heading h2{font-size:36px}.developing-timeline li>p:not(.developing-meta){font-size:18px}}

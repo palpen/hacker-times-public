@@ -1,9 +1,13 @@
+import {parseDiscussionCount,commentCountLabel,commentCountDescription,updateDiscussionLinks,type DiscussionCount} from './comment-counts';
 import type {Story} from '../lib/news';
+export type DiscussionStory=Pick<Story,'id'|'headline'>&{comments?:number};
+// Transport/style injection is for the self-contained preview; never read from request data.
+export type CommentsReaderOptions={developingStory?:string;fetcher?:typeof fetch;stylesReady?:boolean};
 
 const PAGE_SIZE=12, CACHE_LIMIT=24, CACHE_TTL=60_000;
 type Token={type:string;text?:string;href?:string;children?:Token[]};
 type Comment={id:number;parentId:number;by:string|null;time:number|null;deleted:boolean;dead:boolean;unavailable:boolean;content:Token[];contentTruncated:boolean;replyCount:number;repliesAvailable:boolean};
-type Page={storyId:number;parentId:number;depth:number;comments:Comment[];page:{offset:number;limit:number;total:number;nextOffset:number|null;truncated:boolean;partial:boolean};fetchedAt:string};
+type Page=Partial<DiscussionCount>&{storyId:number;parentId:number;depth:number;comments:Comment[];page:{offset:number;limit:number;total:number;nextOffset:number|null;truncated:boolean;partial:boolean};fetchedAt:string};
 const integer=(value:unknown,min=0):value is number=>Number.isSafeInteger(value)&&Number(value)>=min;
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const hnUrl=(id:number)=>'https://news.ycombinator.com/item?id='+id;
@@ -34,7 +38,7 @@ export function validateCommentPage(input:unknown,storyId:number,parentId:number
   ids.add(value.id);
   return {id:value.id,parentId,by:value.by,time:value.time,deleted:value.deleted,dead:value.dead,unavailable:value.unavailable,content:tokens(value.content),contentTruncated:value.contentTruncated,replyCount:value.replyCount,repliesAvailable:value.repliesAvailable} as Comment;
  });
- return {storyId,parentId,depth:input.depth,comments,page:{offset,limit:PAGE_SIZE,total:p.total,nextOffset:p.nextOffset as number|null,truncated:p.truncated,partial:p.partial},fetchedAt:typeof input.fetchedAt==='string'?input.fetchedAt:''};
+ return {...(parseDiscussionCount(input,storyId)??{}),storyId,parentId,depth:input.depth,comments,page:{offset,limit:PAGE_SIZE,total:p.total,nextOffset:p.nextOffset as number|null,truncated:p.truncated,partial:p.partial},fetchedAt:typeof input.fetchedAt==='string'?input.fetchedAt:''};
 }
 export function appendCommentContent(parent:HTMLElement,content:Token[]){
  for(const token of content){
@@ -70,17 +74,18 @@ export function loadCommentsStyles(url:string|undefined):Promise<void>{
 }
 
 /** Progressive enhancement only: unsupported dialog browsers retain the original HN links. */
-export async function createCommentsReader(stories:Story[],date?:string,commentsCssAsset?:string,publicationVersion?:string){
+export async function createCommentsReader(stories:DiscussionStory[],date?:string,commentsCssAsset?:string,publicationVersion?:string,options:CommentsReaderOptions={}){
  const version=publicationVersion?.startsWith('legacy-')?undefined:publicationVersion;
  if(publicationVersion?.startsWith('legacy-')&&!/^legacy-\d{4}-\d{2}-\d{2}$/.test(publicationVersion)||version!==undefined&&!/^(e-[a-f0-9]{24}|bundled-[a-f0-9]{16})$/.test(version))throw Error('Invalid publication version');
- await loadCommentsStyles(commentsCssAsset);
+ if(options.developingStory&&(!/^s-[a-f0-9]{20}$/.test(options.developingStory)||date||publicationVersion))throw Error('Invalid developing story');
+ if(!options.stylesReady)await loadCommentsStyles(commentsCssAsset);
  const byId=new Map(stories.map(story=>[story.id,story]));
  const cache=new Map<string,{expires:number;value:Page}>();
  const pending=new Map<string,{controller:AbortController;promise:Promise<Page>}>();
- let dialog:HTMLDialogElement|null=null,heading:HTMLElement,count:HTMLElement,storyTitle:HTMLElement,original:HTMLAnchorElement,body:HTMLElement,close:HTMLButtonElement;
+ let dialog:HTMLDialogElement|null=null,heading:HTMLElement,count:HTMLElement,snapshot:HTMLElement,storyTitle:HTMLElement,original:HTMLAnchorElement,body:HTMLElement,close:HTMLButtonElement;
  let generation=0,activeId=0,lastId=0,opener:HTMLElement|null=null,scrollX=0,scrollY=0;
  const historyOwner='comments-'+Date.now()+'-'+Math.random().toString(36).slice(2);
- let awaitingBack=false,queuedOpen:{story:Story;trigger:HTMLElement}|null=null;
+ let awaitingBack=false,queuedOpen:{story:DiscussionStory;trigger:HTMLElement}|null=null;
  const ownHistory=()=>typeof history!=='undefined'&&history.state?.htDiscussion?.owner===historyOwner;
  function recordHistory(storyId:number){
   if(typeof history==='undefined'||typeof history.pushState!=='function')return;
@@ -108,7 +113,7 @@ export async function createCommentsReader(stories:Story[],date?:string,comments
   close=element('button','comments-close','Close');close.type='button';close.setAttribute('aria-label','Close discussion');close.addEventListener('click',()=>dismiss());top.appendChild(close);
   heading=element('h2','comments-heading');heading.id='comments-heading';
   count=element('strong','comments-count');count.title='Comment count at publication';heading.appendChild(count);
-  const snapshot=element('span','comments-snapshot','Comment count at publication');snapshot.id='comments-snapshot';
+  snapshot=element('span','comments-snapshot','Comment count at publication');snapshot.id='comments-snapshot';
   storyTitle=element('p','comments-story-title');storyTitle.id='comments-story-title';dialog.setAttribute('aria-describedby',snapshot.id);
   const summary=element('div','comments-summary');append(summary,heading,snapshot);
   original=sourceLink(1,'Post your comments, open the discussion on Hacker News');original.classList.add('comments-original');
@@ -131,7 +136,7 @@ export async function createCommentsReader(stories:Story[],date?:string,comments
  }
  async function request(storyId:number,parentId:number,offset:number):Promise<Page>{
   const query=new URLSearchParams({storyId:String(storyId),offset:String(offset)});
-  if(parentId!==storyId)query.set('parentId',String(parentId));if(date)query.set('date',date);if(version)query.set('version',version);
+  if(parentId!==storyId)query.set('parentId',String(parentId));if(date)query.set('date',date);if(version)query.set('version',version);if(options.developingStory)query.set('developingStory',options.developingStory);
   const key=query.toString(),saved=cache.get(key);
   if(saved&&saved.expires>Date.now()){cache.delete(key);cache.set(key,saved);return saved.value;}
   cache.delete(key);const inflight=pending.get(key);if(inflight)return inflight.promise;
@@ -139,7 +144,7 @@ export async function createCommentsReader(stories:Story[],date?:string,comments
   let timer:ReturnType<typeof setTimeout>|undefined;
   const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{reject(Error('Discussion request timed out'));controller.abort();},25_000);});
   const work=(async()=>{
-   const response=await fetch('/api/comments?'+key,{signal:controller.signal,credentials:'same-origin',headers:{Accept:'application/json'}});
+   const response=await (options.fetcher??fetch)('/api/comments?'+key,{signal:controller.signal,credentials:'same-origin',headers:{Accept:'application/json'}});
    if(!response.ok)throw Error('Discussion is unavailable');
    const value=validateCommentPage(await response.json(),storyId,parentId,offset);
    if(controller.signal.aborted)throw new DOMException('Aborted','AbortError');
@@ -161,6 +166,11 @@ export async function createCommentsReader(stories:Story[],date?:string,comments
    const offset=nextOffset;status.textContent=offset?'Loading more comments…':root?'Loading discussion…':'Loading replies…';
    try{
     const page=await request(storyId,parentId,offset);if(epoch!==generation||activeId!==storyId)return;
+    const currentCount=parseDiscussionCount(page,storyId);
+    if(currentCount){
+     count.textContent=commentCountLabel(currentCount.commentCount);count.title=commentCountDescription(currentCount.commentCountAt);
+     snapshot.textContent=count.title;snapshot.hidden=false;dialog!.setAttribute('aria-describedby',snapshot.id);updateDiscussionLinks(currentCount);
+    }
     let first:HTMLElement|null=null;
     for(const comment of page.comments){if(seen.has(comment.id))continue;seen.add(comment.id);const item=renderComment(comment,storyId,epoch);list.appendChild(item);first??=item;shown++;}
     partial||=page.page.partial;nextOffset=page.page.nextOffset;
@@ -200,14 +210,17 @@ export async function createCommentsReader(stories:Story[],date?:string,comments
   }
   item.appendChild(article);return item;
  }
- function open(story:Story,trigger:HTMLElement){
+ function open(story:DiscussionStory,trigger:HTMLElement){
   if(awaitingBack){queuedOpen={story,trigger};return;}
   if(activeId===story.id&&dialog?.open){close.focus();return;}
   const alreadyOpen=!!dialog?.open;
   generation++;abort();activeId=story.id;lastId=story.id;opener=trigger;recordHistory(story.id);
   if(!alreadyOpen){scrollX=window.scrollX;scrollY=window.scrollY;}
   // Story.comments is the saved edition's HN descendants total, not a live thread-page total.
-  count.textContent=`${story.comments.toLocaleString('en-US')} ${story.comments===1?'comment':'comments'}`;
+  const hasCount=typeof story.comments==='number';
+  count.textContent=hasCount?`${story.comments!.toLocaleString('en-US')} ${story.comments===1?'comment':'comments'}`:'Comments';
+  count.title=hasCount?'Comment count at publication':'';snapshot.textContent=count.title;snapshot.hidden=!hasCount;
+  dialog!.setAttribute('aria-describedby',hasCount?snapshot.id:'');
   storyTitle.textContent=story.headline;original.href=hnUrl(story.id);
   const page=threadPage(story.id,story.id,true,generation);body.replaceChildren(page.section);body.scrollTop=0;
   document.documentElement.classList.add('comments-open');

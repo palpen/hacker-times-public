@@ -1,3 +1,6 @@
+import {developingRoute,developingList,developingRequest} from '../lib/developing-news/routes';
+import {withDevelopingNews} from '../lib/developing-news/render';
+export {DevelopingNews} from '../lib/developing-news/tracker';
 import {assetResponse} from '../lib/asset-response';
 import {secureResponse,RequestError} from '../lib/security';
 import {withSubmissionAges} from '../lib/submission-age-document';
@@ -10,7 +13,9 @@ import {readinessResponse} from '../lib/production/readiness';
 import {call,enabled,collect,runEdition} from '../lib/production/runner';
 import type {ImageAsset} from '../lib/production/images';
 export {Newsroom} from '../lib/production/newsroom';
-const comments=createCommentsService({readEdition:async(_req,bindings,date,version)=>{
+const comments=createCommentsService({readDevelopingStory:async(request,bindings,threadId)=>{
+ try{const query=new URLSearchParams({threadId,storyId:new URL(request.url).searchParams.get('storyId')!});const response=await developingRequest(bindings as unknown as ProductionEnv,'/comments-context?'+query);return response.ok?await response.json() as {stories:{id:number}[]}:null;}catch{return null;}
+},readEdition:async(_req,bindings,date,version)=>{
  try{const p=await call(bindings as unknown as ProductionEnv,'edition',{...(date?{date}:{}),...(version?{version}:{})}) as Publication;return ((!version||version===p.version)&&(!date||date===p.edition.editionDate))?p.edition:null;}catch{return null;}
 }});
 const worker={
@@ -22,7 +27,9 @@ const worker={
    let decodedPath=path;try{decodedPath=decodeURIComponent(path);}catch{/* Invalid paths are not admin routes. */}
    if(decodedPath==='/admin'||decodedPath.startsWith('/admin/'))return secureResponse(new Response(request.method==='HEAD'?null:'Not found',{status:404,headers:{'Cache-Control':'no-store'}}));
     if(!['GET','HEAD'].includes(request.method))throw new RequestError('Method not allowed',405);
-    if(path==='/healthz')response=Response.json({mode:'production',publicationEnabled:env.PUBLICATION_ENABLED==='true',scheduleEnabled:env.SCHEDULE_ENABLED==='true'});
+    const developing=await developingRoute(request,env);
+    if(developing)response=developing;
+    else if(path==='/healthz')response=Response.json({mode:'production',publicationEnabled:env.PUBLICATION_ENABLED==='true',scheduleEnabled:env.SCHEDULE_ENABLED==='true'});
     else if(path==='/readyz')response=await readinessResponse(env);
     else if(/^\/images\/[a-f0-9]{64}$/.test(path)){
      const hash=path.slice('/images/'.length),asset=await call(env,'image',{hash}) as ImageAsset;
@@ -33,7 +40,8 @@ const worker={
     else if(path==='/'||path==='/api/edition'){
      const date=url.searchParams.get('date');if(date&&!/^\d{4}-\d{2}-\d{2}$/.test(date))throw new RequestError('Invalid date');
      const p=await call(env,'edition',date?{date}:{}) as Publication;
-     response=path==='/'?new Response(withSectionHeadingLinks(withFooterTimestamp(withSubmissionAges(p.html,p.edition))),{headers:{'Content-Type':'text/html; charset=utf-8'}}):Response.json({...p.edition,publicationVersion:p.version,persisted:true});
+     const html=path==='/'?withSectionHeadingLinks(withFooterTimestamp(withSubmissionAges(p.html,p.edition))):'';
+     response=path==='/'?new Response(env.DEVELOPING_NEWS?withDevelopingNews(html,date?null:await developingList(env),!date):html,{headers:{'Content-Type':'text/html; charset=utf-8'}}):Response.json({...p.edition,publicationVersion:p.version,persisted:true});
      response.headers.set('X-Edition-Version',p.version);response.headers.set('Cache-Control','no-store');
     }else if(path==='/api/comments'){
      enabled(env.LIVE_FETCH_ENABLED,'Live comments');
@@ -47,6 +55,7 @@ const worker={
   // All live switches default off. Without explicit automatic editorial opt-in,
   // this only pins a metadata batch. Completed stages survive interrupted runs.
   if(env.SCHEDULE_ENABLED!=='true'||env.MUTATIONS_ENABLED!=='true'||env.LIVE_FETCH_ENABLED!=='true')return;
+  if(env.DEVELOPING_NEWS_ENABLED==='true')ctx.waitUntil(developingRequest(env,'/tick','POST').catch(()=>new Response('Deferred')));
   ctx.waitUntil(observeRun('cron',async()=>{
    const slot=String(Math.floor(event.scheduledTime/(30*60_000)));
    const claimed=await call(env,'schedule',{slot}) as {claimed:boolean};if(!claimed.claimed)return {checkpoint:'deduplicated'};

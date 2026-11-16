@@ -654,3 +654,16 @@ test('image review cannot bypass the total cap or retry an uncertain request, an
   }finally{globalThis.fetch=old;}
  }
 });
+
+test('production comments use published developing timelines independently of today',async()=>{
+ const old=globalThis.fetch;let reads=0,allowed=true;const threadId='s-aaaaaaaaaaaaaaaaaaaa';
+ try{
+  globalThis.fetch=async url=>{reads++;assert.equal(url,'https://hacker-news.firebaseio.com/v0/item/876543.json');return Response.json({id:876543,type:'story',kids:[]});};
+  const {worker}=await import(pathToFileURL(out)+'?developing-comments');
+  const env={LIVE_FETCH_ENABLED:'true',NEWSROOM:{idFromName:()=>{throw Error('Must not read today');}},DEVELOPING_NEWS:{idFromName:x=>x,get:()=>({fetch:async request=>{const url=new URL(request.url);assert.equal(url.pathname,'/comments-context');assert.equal(url.searchParams.get('threadId'),threadId);assert.equal(url.searchParams.get('storyId'),'876543');return allowed?Response.json({stories:[{id:876543}]}):new Response('Not found',{status:404});}})}};
+  const request=()=>new Request('https://paper.example/api/comments?storyId=876543&developingStory='+threadId);
+  const result=await worker.fetch(request(),env);assert.equal(result.status,200);assert.equal((await result.json()).storyId,876543);assert.equal(reads,1);
+  allowed=false;assert.equal((await worker.fetch(request(),env)).status,404);assert.equal(reads,1,'authorization is checked even for cached comments');
+  assert.equal((await worker.fetch(new Request('https://paper.example/comments-context?threadId='+threadId+'&storyId=876543'),env)).status,404,'private context route is not public');
+ }finally{globalThis.fetch=old;}
+});

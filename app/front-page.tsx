@@ -1,6 +1,9 @@
 'use client';
+import '../web/developing-news.css';
 import {useEffect,useState,useRef} from 'react';
 import {categories,type Edition,type Story} from '../lib/contracts';
+import {renderDevelopingSection} from '../lib/developing-news/render';
+import type {PublicNews} from '../lib/developing-news/types';
 import {summaryText} from '../lib/summary';
 import {renderDiscussionHighlights} from '../lib/discussion-markup';
 import {installDiscussionCarousel} from '../web/discussion-carousel';
@@ -14,6 +17,8 @@ function StoryMeta({s}:{s:Story}){return <div className="story-meta"><a href={s.
 function Photo({s,lead=false}:{s:Story,lead?:boolean}){const [failed,setFailed]=useState(false);if(!s.image||failed)return null;return <figure className="story-photo"><a href={s.url} target="_blank" rel="noopener noreferrer" tabIndex={-1}><img src={s.image} alt={s.imageAlt||s.headline} loading={lead?'eager':'lazy'} referrerPolicy="no-referrer" onError={()=>setFailed(true)}/></a><figcaption>{s.imageCredit||s.publisher}</figcaption></figure>}
 function Article({s,lead=false,variant='',showDeck=true,showPhoto=true}:{s:Story,lead?:boolean,variant?:string,showDeck?:boolean,showPhoto?:boolean}){return <article data-story-id={s.id} className={'article '+(lead?'lead ':'')+variant}><h2><a href={s.url} target="_blank" rel="noopener noreferrer">{s.headline}</a></h2>{summaryText(s,!showDeck)&&<p className="deck">{summaryText(s,!showDeck)}</p>}<StoryMeta s={s}/>{showPhoto&&<Photo key={s.id} s={s} lead={lead}/>}</article>}
 export default function FrontPage({initialEdition}:{initialEdition:Edition}){
+ const [developing,setDeveloping]=useState<PublicNews|null>(null);
+ useEffect(()=>{fetch('/api/developing-news').then(r=>r.ok?r.json():null).then(data=>setDeveloping(data as PublicNews|null)).catch(()=>{});},[]);
  const [edition,setEdition]=useState<Edition>(initialEdition);
  const railRef=useRef<HTMLDivElement>(null);
  function scrollRail(left:number){railRef.current?.scrollBy({left,behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});}
@@ -41,7 +46,7 @@ export default function FrontPage({initialEdition}:{initialEdition:Edition}){
  return <main className="paper">
   <a className="skip-link" href="#news">Skip to news</a>
   <header className="masthead"><a className="brand" href="/" aria-label="Hacker Times home"><h1>Hacker Times</h1></a><div className="header-actions"><button className="icon-button" onClick={()=>chooseTheme(nextTheme(theme))} aria-label={theme==='dark'?'Switch to light mode':'Switch to dark mode'} aria-pressed={theme==='dark'} title={theme==='dark'?'Light mode':'Dark mode'}><ThemeIcon theme={theme}/></button><button className="icon-button" onClick={()=>setSearchOpen(!searchOpen)} aria-label="Search this edition" aria-expanded={searchOpen} title="Search"><SearchIcon/></button></div></header>
-  <nav className="sections" aria-label="News sections">{sections.map(s=><button key={s} className={section===s?'active':''} onClick={()=>{setSection(s);setQuery('')}} aria-current={section===s?'page':undefined}>{s}</button>)}</nav>
+  <nav className="sections" aria-label="News sections">{sections.map(s=><button key={s} className={section===s?'active':''} onClick={()=>{setSection(s);setQuery('')}} aria-current={section===s?'page':undefined}>{s}</button>)}<a href="/developing-news">Developing News</a></nav>
   {searchOpen&&<form className="search-box" role="search" onSubmit={e=>e.preventDefault()}><label className="sr-only" htmlFor="search">Search this edition</label><input id="search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search headlines and publishers" autoFocus type="search"/><button type="button" onClick={()=>{setQuery('');setSearchOpen(false)}}>Close</button></form>}
   {archive&&<section className="archive-box" aria-label="Past editions"><div className="panel-heading"><h2>Past editions</h2><button onClick={()=>setArchive(false)}>Close</button></div><div className="archive-links"><button onClick={()=>loadEdition()}>Latest edition</button>{dates.map(d=><button key={d} onClick={()=>loadEdition(d)}>{new Date(d+'T12:00:00Z').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric',timeZone:'UTC'})}</button>)}{!dates.length&&<p>No saved editions yet.</p>}</div></section>}
   {error&&<p className="notice" role="status">{error}</p>}
@@ -51,6 +56,7 @@ export default function FrontPage({initialEdition}:{initialEdition:Edition}){
   {browsing?<><h2 className="section-heading">{query?'Search results':section}</h2><div className="story-grid filtered-grid">{filtered.map(s=><Article key={s.id} s={s}/>)}</div>{!filtered.length&&<p className="empty">No matching stories in this edition.</p>}</>:lead?<>
    <section className="top-stories" aria-label="Top stories"><div className="lead-column"><Article s={lead} lead/>{features[1]&&<Article s={features[1]} variant="secondary"/>}</div><aside className="side-column" aria-label="More top stories">{features.slice(2,5).map((s,i)=><Article key={s.id} s={s} variant={i===1?'brief':''} showDeck={i!==1}/>)}</aside></section>
    <section className="story-grid" aria-label="More stories">{features.slice(5,8).map((s,i)=><Article key={s.id} s={s} showDeck={i!==1}/>)}</section>
+   {!archived&&<div dangerouslySetInnerHTML={{__html:renderDevelopingSection(developing)}}/>}
    {edition.discussionHighlights!==undefined?<div dangerouslySetInnerHTML={{__html:renderDiscussionHighlights(edition)}}/>:rail.length>0&&<section className="more-stories" aria-labelledby="more-heading"><div className="rail-heading"><h2 id="more-heading">{expanded?'The conversation':'More from the front page'}</h2><div className="rail-controls"><button aria-label="Scroll stories left" onClick={()=>scrollRail(-320)}>←</button><button aria-label="Scroll stories right" onClick={()=>scrollRail(320)}>→</button></div></div><div className="story-rail" ref={railRef} tabIndex={0} aria-label="Scrollable story collection" onKeyDown={e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();scrollRail(e.key==='ArrowRight'?300:-300);}}}>{rail.map(s=><article className="rail-card" key={s.id} data-story-id={s.id}><Photo s={s}/><h3><a href={s.url} target="_blank" rel="noopener noreferrer">{s.headline}</a></h3>{summaryText(s,true)&&<p className="deck">{summaryText(s,true)}</p>}<StoryMeta s={s}/></article>)}</div></section>}
    {desks.map(d=><section className="topic-desk" key={d.name} aria-labelledby={'desk-'+d.name.toLowerCase()}><div className="desk-heading"><h2 id={'desk-'+d.name.toLowerCase()}><a href={'#desk-'+d.name.toLowerCase()} onClick={e=>{e.preventDefault();setSection(d.name);window.scrollTo({top:0,behavior:'smooth'})}}>{d.name}</a></h2></div><div className="desk-layout"><Article s={d.stories[0]} variant="desk-feature"/><div className="desk-briefs">{d.stories.slice(1).map((s,i)=><Article key={s.id} s={s} variant="desk-brief" showDeck={i===0} showPhoto={false}/>)}</div></div></section>)}
   </>:<p className="empty">The edition is being prepared.</p>}
