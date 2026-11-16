@@ -38,7 +38,10 @@ running operations finish before another begins.
 The scheduled validator rejects changed budgets/storage, extra routes, alternate
 environments and plaintext secrets. Routine releases verify agreement between the
 public readers, workers.dev access and half-hour schedule, upload one code version,
-activate that exact version at 100%, and verify the deployment and unchanged schedule.
+wait for that exact uploaded version to be readable, activate it at 100%, and
+verify the deployment and unchanged schedule. Cloudflare error 100146 during the
+readback is retried for up to six reads with 31 seconds of total backoff; other
+errors stop the release. Uploads and activations are not automatically repeated.
 They do not rewrite domain bindings. Domain health checks use public HTTP responses,
 so the deployment token needs no DNS/zone read access.
 

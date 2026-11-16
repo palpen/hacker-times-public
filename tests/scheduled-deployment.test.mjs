@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {validateDispatchContext, validateReleaseContext} from '../scripts/validate-staging-config.mjs';
 import {load} from 'js-yaml';
 import {validateScheduledConfig} from '../scripts/validate-scheduled-config.mjs';
-import {deployScheduledVersion, validateLiveTriggers, uploadedVersion, verifyDeployment} from '../scripts/deploy-scheduled-version.mjs';
+import {deployScheduledVersion, validateLiveTriggers, uploadedVersion, verifyDeployment, waitForUploadedVersion} from '../scripts/deploy-scheduled-version.mjs';
 
 const config = JSON.parse(readFileSync(new URL('../wrangler.scheduled.jsonc', import.meta.url), 'utf8'));
 const readWorkflow = name => load(readFileSync(new URL('../.github/workflows/'+name, import.meta.url), 'utf8'));
@@ -58,19 +58,20 @@ test('scheduled and pause deployments serialize against the same Worker with iso
 });
 
 const version = '12345678-1234-1234-1234-123456789abc';
+const versionDetails = async id => ({id});
 const triggers = () => ({readers:[...config.routes.map(route=>'https://'+route.pattern),'https://hacker-times-production.pspenano.workers.dev'].map(origin=>({origin,status:200,version:'e-'+'a'.repeat(24),headerVersion:'e-'+'a'.repeat(24),health:{mode:'production',publicationEnabled:true,scheduleEnabled:true}})),schedules:{schedules:[{cron:'*/30 * * * *'}]},subdomain:{enabled:true}});
 test('code releases refuse changed domains, schedules and incomplete version activation', async () => {
   for (const mutate of [value=>value.readers.pop(), value=>value.readers[0].origin='https://other.example', value=>value.readers[0].version='e-'+'b'.repeat(24), value=>value.readers[0].health.publicationEnabled=false, value=>value.schedules.schedules.push({cron:'* * * * *'}), value=>value.subdomain.enabled=false]) {
     const changed=triggers();mutate(changed);assert.throws(()=>validateLiveTriggers(config,changed));
     let calls=0;
-    await assert.rejects(deployScheduledVersion({config,sha:'a'.repeat(40),readTriggers:async()=>changed,runWrangler:()=>{calls++;}}));
+    await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>changed,runWrangler:()=>{calls++;}}));
     assert.equal(calls,0);
   }
   assert.throws(()=>uploadedVersion('No upload confirmation'));
   assert.throws(()=>verifyDeployment({versions:[{version_id:version,percentage:50}]},version));
   assert.throws(()=>verifyDeployment({versions:[{version_id:'wrong',percentage:100}]},version));
   const calls=[];let reads=0;
-  const result=await deployScheduledVersion({config,sha:'a'.repeat(40),readTriggers:async()=>{reads++;return triggers();},runWrangler:args=>{
+  const result=await deployScheduledVersion({config,readVersion:versionDetails,sha:'a'.repeat(40),readTriggers:async()=>{reads++;return triggers();},runWrangler:args=>{
     calls.push(args);
     return args.includes('upload')?'Worker Version ID: '+version:args.includes('status')?JSON.stringify({versions:[{version_id:version,percentage:100}],id:'release-id'}):'';
   }});
@@ -94,7 +95,7 @@ test('pause and resume change only the reviewed cron after activating the exact 
     const initialState = operation === 'pause' ? triggers : pausedTriggers;
     for (const initial of [initialState, finalState]) {
       const events = []; let reads = 0;
-      const result = await deployScheduledVersion({config:target, operation, sha:'a'.repeat(40),
+      const result = await deployScheduledVersion({config:target,readVersion:versionDetails, operation, sha:'a'.repeat(40),
         readTriggers:async()=>++reads === 1 ? initial() : finalState(),
         runWrangler:args=>{
           events.push(args);
@@ -120,13 +121,13 @@ test('publishing controls reject unexpected live state and verify the requested 
     return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
   };
   for (const operation of ['pause', 'resume']) {
-    await assert.rejects(deployScheduledVersion({config:operation === 'pause' ? pausedConfig : config,
+    await assert.rejects(deployScheduledVersion({config:operation === 'pause' ? pausedConfig : config, readVersion:versionDetails,
       operation, sha:'a'.repeat(40), readTriggers:async()=>unexpected, runWrangler, setSchedules:async()=>{mutations++;}}));
   }
   assert.equal(mutations, 0);
-  await assert.rejects(deployScheduledVersion({config, operation:'resume', sha:'a'.repeat(40),
+  await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails, operation:'resume', sha:'a'.repeat(40),
     readTriggers:async()=>pausedTriggers(), runWrangler, setSchedules:async()=>{}}), /do not match/);
-  await assert.rejects(deployScheduledVersion({config, sha:'a'.repeat(40),
+  await assert.rejects(deployScheduledVersion({config,readVersion:versionDetails, sha:'a'.repeat(40),
     readTriggers:async()=>pausedTriggers(), runWrangler}), /do not match/);
 });
 
@@ -196,4 +197,39 @@ test('CLI permits automatic release validation without permitting automatic paus
     assert.equal(result.status, 1);
     assert.match(result.stderr, /manual dispatch/);
   }
+});
+
+test('uploaded version visibility is read back with bounded retries for Cloudflare 100146 only', async () => {
+  const visibilityError = () => Object.assign(new Error('not visible'), {codes:[100146]});
+  let reads = 0; const waits = [];
+  await waitForUploadedVersion(version, {
+    readVersion:async id=>{assert.equal(id,version);if (++reads < 3) throw visibilityError();return {id};},
+    pause:async ms=>{waits.push(ms);},
+  });
+  assert.equal(reads, 3);
+  assert.deepEqual(waits, [1000,2000]);
+  reads=0; waits.length=0;
+  await assert.rejects(waitForUploadedVersion(version, {
+    readVersion:async()=>{reads++;throw visibilityError();}, pause:async ms=>{waits.push(ms);},
+  }), /not visible/);
+  assert.equal(reads,6);
+  assert.deepEqual(waits,[1000,2000,4000,8000,16000]);
+  for (const error of [new Error('network failure'),Object.assign(new Error('auth'),{codes:[10000]}),Object.assign(new Error('mixed'),{codes:[100146,10000]})]) {
+    reads=0;
+    await assert.rejects(waitForUploadedVersion(version, {readVersion:async()=>{reads++;throw error;}, pause:async()=>assert.fail('unexpected retry')}), value=>value===error);
+    assert.equal(reads,1);
+  }
+  await assert.rejects(waitForUploadedVersion(version, {readVersion:async()=>({id:'wrong'}),pause:async()=>assert.fail('unexpected retry')}), /did not match/);
+});
+
+test('a failed uploaded-version readback cannot activate a version or change schedules', async () => {
+  const calls=[];
+  await assert.rejects(deployScheduledVersion({config, sha:'a'.repeat(40),
+    readTriggers:async()=>triggers(),
+    readVersion:async()=>{throw new Error('readback failed');},
+    runWrangler:args=>{calls.push(args);return 'Worker Version ID: '+version;},
+    setSchedules:async()=>assert.fail('schedule must not change'),
+  }), /readback failed/);
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].slice(0,2),['versions','upload']);
 });
