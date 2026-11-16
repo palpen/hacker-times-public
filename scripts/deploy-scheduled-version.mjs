@@ -31,14 +31,31 @@ export function verifyDeployment(value, version) {
   }
 }
 
-export async function deployScheduledVersion({config, sha, readTriggers, runWrangler, setSchedules, operation = 'deploy'}) {
+export async function waitForUploadedVersion(version, {readVersion, pause = ms => new Promise(resolve => setTimeout(resolve, ms))}) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const value = await readVersion(version);
+      if (value?.id !== version) throw new Error('Uploaded version readback did not match the expected version.');
+      return;
+    } catch (error) {
+      // Retry only the known read-after-upload visibility error. This never
+      // repeats an upload or activation, or masks authentication/transport errors.
+      if (error?.codes?.length !== 1 || error.codes[0] !== 100146 || attempt === 5) throw error;
+      await pause(1000 * 2 ** attempt);
+    }
+  }
+}
+
+export async function deployScheduledVersion({config, sha, readTriggers, readVersion, runWrangler, setSchedules, operation = 'deploy'}) {
   if (!['deploy', 'pause', 'resume'].includes(operation)) throw new Error('Expected deploy, pause or resume.');
   if (operation === 'pause') validateStagingConfig(config); else validateScheduledConfig(config);
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Exact reviewed commit SHA required.');
+  if (typeof readVersion !== 'function') throw new Error('Uploaded version readback required.');
   if (operation !== 'deploy' && typeof setSchedules !== 'function') throw new Error('Schedule control required.');
   validateLiveTriggers(config, await readTriggers(), {allowTransition: operation !== 'deploy'});
   const configPath = operation === 'pause' ? 'wrangler.production.jsonc' : 'wrangler.scheduled.jsonc';
   const version = uploadedVersion(runWrangler(['versions', 'upload', '--config', configPath, '--tag', sha, '--message', 'Reviewed commit '+sha]));
+  await waitForUploadedVersion(version, {readVersion});
   runWrangler(['versions', 'deploy', version+'@100', '--config', configPath, '--yes', '--message', 'Reviewed commit '+sha]);
   const deployment = JSON.parse(runWrangler(['deployments', 'status', '--config', configPath, '--json']));
   verifyDeployment(deployment, version);
@@ -64,10 +81,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         headers:{Authorization:'Bearer '+token, 'Content-Type':'application/json'},
         ...(body === undefined ? {} : {body:JSON.stringify(body)}), signal:AbortSignal.timeout(30_000)});
       const value = await response.json();
-      if (!response.ok || !value.success) throw new Error('Cloudflare request '+path+' failed ('+response.status+'); codes: '+(value.errors??[]).map(error=>error.code).join(','));
+      if (!response.ok || !value.success) {
+        const codes = (value.errors??[]).map(error=>error.code);
+        throw Object.assign(new Error('Cloudflare request '+path+' failed ('+response.status+'); codes: '+codes.join(',')), {codes});
+      }
       return value.result;
     };
     const result = await deployScheduledVersion({config, sha:process.env.GITHUB_SHA, operation,
+      readVersion:version=>api('/workers/scripts/'+config.name+'/versions/'+version),
       setSchedules:schedules=>api('/workers/scripts/'+config.name+'/schedules', schedules),
       readTriggers:async()=>{
         const [readers,schedules,subdomain] = await Promise.all([
