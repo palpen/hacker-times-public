@@ -8,10 +8,10 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'palpen/hacker-times-public' &&
-      github.ref == 'refs/heads/migration/cloudflare-owned'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment: cloudflare-staging
+    environment: production
     env:
       CI: 'true'
       WRANGLER_SEND_METRICS: 'false'

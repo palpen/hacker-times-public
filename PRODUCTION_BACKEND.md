@@ -158,48 +158,27 @@ Cloudflare 1010 access denial.
   Images remain omitted. Model provider billing/availability and live HN/publisher
   integration have not been tested against real content in this build.
 
-## Manual default-off staging deployment
+## Production release controls
 
-`.github/workflows/deploy-cloudflare-staging.yml` accepts only `workflow_dispatch`
-from `palpen/hacker-times-public` at `refs/heads/migration/cloudflare-owned`.
-There are no push, pull-request, fork, reusable-workflow or scheduled triggers.
-The deploy job uses the `cloudflare-staging` GitHub environment, which must restrict
-deployment branches to that exact branch before its scoped token is installed.
+The application now releases from `main` through **Deploy production**. Automatic
+checks run on pull requests and pushes to `main`; releases remain manual. The
+separate **Pause automatic publishing** and **Resume automatic publishing** controls
+affect this same live Worker. There is no separate staging website.
 
-GitHub requires the workflow file on the default branch to expose manual dispatch.
-Publish the identical workflow file on `main`, but keep backend changes on the
-migration branch. Select `migration/cloudflare-owned` when dispatching. A dispatch
-from `main` is skipped. Both jobs check out the immutable event SHA, not a moving
-branch head, and do not persist GitHub credentials. Both official actions are pinned
-to verified full commit SHAs. GitHub permissions are limited to `contents: read`.
+All production operations use the `production` GitHub environment restricted to
+`main`, share a serial deployment group, and validate the exact event SHA in a
+secret-free runner before using credentials in a fresh runner. Locked dependencies,
+pinned actions, configuration guards, source cleanliness checks and immutable
+version activation remain enforced. Secrets are supplied only to the final step.
 
-A validation job without an environment or secrets installs the exact npm lockfile
-with lifecycle scripts disabled, runs all fictional Node tests, checks types, lints
-the backend/guards and builds the exact Worker with a Wrangler dry-run. It then
-verifies the configuration again and rejects source changes or untracked files.
-After success, the protected deploy job uses a fresh runner, rechecks out the same
-SHA and installs locked tools with `--ignore-scripts`. Test/build processes and
-modified dependencies cannot persist from validation into deployment. No tests run
-in the deploy job. Wrangler and its locked runtime dependencies remain trusted.
+`scripts/validate-staging-config.mjs` retains its historical filename and validates
+the reviewed paused policy: unchanged account, Worker, Durable Object and spending
+bounds, six explicit false flags and no cron. `validate-scheduled-config.mjs`
+validates the corresponding active policy. No configuration resets storage.
 
-`scripts/validate-staging-config.mjs` allows only the reviewed account, Worker,
-Durable Object binding/migration, caps/rates, six explicit `"false"` flags and empty
-cron list. Unknown fields, alternate environments, routes, build hooks and plaintext
-secrets fail closed. The deploy job rechecks this policy and source cleanliness.
-Only its final step receives the environment secret `CLOUDFLARE_API_TOKEN`.
-
-Deployment targets account `dc81a3cb74492ea63c9f3e14f13711a2` and Worker
-`hacker-times-production` through `wrangler.production.jsonc`. It does not use
-`--keep-vars`, so checked default-off values replace remote plain variables.
-Existing Cloudflare Worker secrets, including `OPENAI_API_KEY`, stay remote and are
-neither supplied nor edited by this workflow. Deployments are serialized with
-`cancel-in-progress: false`; validation has a 20-minute timeout and deployment a
-10-minute timeout. There is no endpoint probe, curl verification or retry of the
-prior Cloudflare 1010 denial.
-
-Workflow source is not evidence that any GitHub run or remote deployment succeeded.
-Verify the exact commit/run result and Cloudflare deployment version separately.
-Do not enable live processing, cron or domain cutover through this staging workflow.
+See [CLOUDFLARE_SCHEDULE.md](CLOUDFLARE_SCHEDULE.md#production-releases) for release,
+pause, resume and initial-setup instructions. Earlier default-off launch notes in
+this document describe the original staging preparation, not current release policy.
 
 ## Verification commands
 

@@ -18,38 +18,57 @@ durable holds, lead history, model reservations and atomic publication remain in
 force. API spending remains capped internally at USD 1/day and USD 5/month;
 Cloudflare charges are separate. The existing remote `OPENAI_API_KEY` is preserved.
 
-The manual `Deploy Cloudflare scheduled publisher` GitHub workflow accepts only
-`migration/cloudflare-owned`. It shares deployment concurrency and the existing
-branch-restricted credential environment with the staging workflow, validates
-without credentials, then deploys from a clean runner at the exact tested SHA.
-The environment is still named `cloudflare-staging`; it grants access to this
-same Worker. The scheduled validator rejects changed budgets/storage, extra
-routes, alternate environments and plaintext secrets. Routine releases verify
-agreement between the public readers, workers.dev access and half-hour schedule, upload
-one code version, activate that exact version at 100%, and verify the deployment
-and unchanged schedule. They do not rewrite domain bindings. Domain health checks
-use public HTTP responses, so the deployment token needs no DNS/zone read access.
-This avoids the
-zone-access error encountered when the scoped deployment credential tried to
-reapply already-correct custom domains after a successful code upload.
+## Production releases
 
-This workflow requires the expected triggers to exist already. Initial setup,
-schedule activation after a pause, or intentional domain changes require the
-full deployment command below with the appropriate existing account access;
-the routine release fails instead of silently changing those resources.
+`main` is the authoritative release branch. The former migration branch is no
+longer accepted by production workflows. **Check production** runs automatically
+on pull requests and pushes to `main`, without an environment or deployment secrets.
+It runs the Node tests, TypeScript, backend/deployment lint, and a Worker dry-run.
 
-Deploy locally after the full checks and a pushed commit:
+For a normal release, open GitHub Actions → **Deploy production** → **Run workflow**
+and choose `main`. Only manual dispatches from this repository's `main` are allowed.
+A separate validation job checks the exact commit without credentials. A fresh
+runner then deploys that same commit using the `production` environment, whose
+branch policy must permit only `main`. Only the final deployment step receives
+`CLOUDFLARE_API_TOKEN`. All three production controls share one concurrency group;
+running operations finish before another begins.
+
+The scheduled validator rejects changed budgets/storage, extra routes, alternate
+environments and plaintext secrets. Routine releases verify agreement between the
+public readers, workers.dev access and half-hour schedule, upload one code version,
+activate that exact version at 100%, and verify the deployment and unchanged schedule.
+They do not rewrite domain bindings. Domain health checks use public HTTP responses,
+so the deployment token needs no DNS/zone read access.
+
+### Pause and resume automatic publishing
+
+Run **Pause automatic publishing** from `main` to set all six live flags off and
+remove cron. Readers continue serving the saved edition and archives. Run
+**Resume automatic publishing** from `main` to restore the six flags and the one
+`*/30 * * * *` cron. These are live production controls, not a staging environment.
+They validate and deploy the selected main commit as well as changing the schedule.
+Resume restarts the existing pending work; it does not clear safety holds or history.
+
+Both controls preserve the account, Worker, Durable Object, migration history,
+remote secrets and custom-domain bindings. They upload and activate an exact Worker
+version, update only the schedules API, and verify the resulting public flags and
+cron. Repeating the same operation is permitted. Unexpected live configuration
+fails closed. A failed operation can leave a partial change; inspect the active
+version, flags and schedule before retrying. A normal **Deploy production** refuses
+a paused configuration; use **Resume automatic publishing** first when appropriate.
+
+The files retain their historical names: `wrangler.production.jsonc` is the paused
+configuration and `wrangler.scheduled.jsonc` is the active configuration. They both
+target the same live Worker. Never delete or replace the Durable Object to pause,
+resume or roll back code. A code rollback does not roll back SQLite data.
+
+Initial Worker/domain setup is separate from routine releases. After full checks,
+use the appropriate existing account access for an intentional full setup:
 
 ```
 node scripts/validate-scheduled-config.mjs
 npx wrangler deploy --config wrangler.scheduled.jsonc
 ```
-
-To stop automatic publishing, deploy the existing `wrangler.production.jsonc`
-configuration through `Deploy Cloudflare staging`. It explicitly disables all
-six live flags and removes cron. Do not roll back or delete the Durable Object.
-Both configurations preserve the apex and www custom-domain routes so a pause
-does not alter the reader's domain binding.
 
 ## Stored Worker logs
 

@@ -1,7 +1,6 @@
-name: Deploy Cloudflare staging
+name: Pause automatic publishing
 
-# The identical workflow must also exist on the default branch for GitHub's
-# manual dispatch UI. Only the reviewed migration branch may execute this job.
+# Production releases are manual and run only from the authoritative main branch.
 on:
   workflow_dispatch:
 
@@ -9,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloudflare-staging-hacker-times-production
+  group: hacker-times-production
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +16,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'palpen/hacker-times-public' &&
-      github.ref == 'refs/heads/migration/cloudflare-owned'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -55,10 +54,10 @@ jobs:
         run: node node_modules/typescript/bin/tsc --noEmit --incremental false
 
       - name: Lint the backend and staging safeguards
-        run: node node_modules/eslint/bin/eslint.js lib/production worker/production.ts lib/comments-core.ts scripts/validate-staging-config.mjs tests/production*.mjs tests/staging-deployment.test.mjs
+        run: node node_modules/eslint/bin/eslint.js lib/production worker/production.ts lib/comments-core.ts scripts/validate-staging-config.mjs scripts/deploy-scheduled-version.mjs tests/production*.mjs tests/staging-deployment.test.mjs
 
       - name: Build the exact Worker without deploying
-        run: node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.production.jsonc --outdir dist/cloudflare-staging
+        run: node node_modules/wrangler/bin/wrangler.js deploy --dry-run --config wrangler.production.jsonc --outdir dist/cloudflare-paused
 
       - name: Recheck the reviewed configuration and source
         run: |
@@ -74,10 +73,10 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'palpen/hacker-times-public' &&
-      github.ref == 'refs/heads/migration/cloudflare-owned'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment: cloudflare-staging
+    environment: production
     defaults:
       run:
         shell: bash
@@ -109,12 +108,12 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
 
       # This is the only step that receives the scoped deployment credential.
-      # Do not use --keep-vars: all six live switches must be overwritten to OFF.
+      # All six live switches are explicitly OFF; only the cron is removed.
       # Existing remote Worker secrets are preserved; none are supplied here.
-      - name: Deploy default-off staging
+      - name: Pause publishing on the live production Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
         run: |
           test -n "$CLOUDFLARE_API_TOKEN"
-          node node_modules/wrangler/bin/wrangler.js deploy --config wrangler.production.jsonc
+          node scripts/deploy-scheduled-version.mjs pause

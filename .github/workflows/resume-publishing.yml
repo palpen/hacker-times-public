@@ -1,7 +1,6 @@
-name: Deploy Cloudflare scheduled publisher
+name: Resume automatic publishing
 
-# The identical workflow must also exist on the default branch for GitHub's
-# manual dispatch UI. Only the reviewed migration branch may execute this job.
+# Production releases are manual and run only from the authoritative main branch.
 on:
   workflow_dispatch:
 
@@ -9,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloudflare-staging-hacker-times-production
+  group: hacker-times-production
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +16,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'palpen/hacker-times-public' &&
-      github.ref == 'refs/heads/migration/cloudflare-owned'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -74,11 +73,11 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.repository == 'palpen/hacker-times-public' &&
-      github.ref == 'refs/heads/migration/cloudflare-owned'
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Reuse the existing branch-restricted deployment credential for this Worker.
-    environment: cloudflare-staging
+    # The production environment restricts deployment credentials to main.
+    environment: production
     defaults:
       run:
         shell: bash
@@ -112,10 +111,10 @@ jobs:
       # This is the only step that receives the scoped deployment credential.
       # Verify existing domains/cron, then deploy code without rewriting triggers.
       # Existing remote Worker secrets and domain bindings are preserved.
-      - name: Deploy and verify the scheduled Worker version
+      - name: Resume publishing on the live production Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
         run: |
           test -n "$CLOUDFLARE_API_TOKEN"
-          node scripts/deploy-scheduled-version.mjs
+          node scripts/deploy-scheduled-version.mjs resume

@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    if: github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/migration/cloudflare-owned'
+    if: github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -33,7 +33,7 @@ jobs:
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment: cloudflare-staging
+    environment: production
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:

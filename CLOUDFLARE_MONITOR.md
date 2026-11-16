@@ -33,8 +33,8 @@ General Email Sending to arbitrary recipients is a different, paid feature.
    services: inspect MX/SPF records before activation; do not replace them without
    the owner's authorization. `ALERT_FROM` must use an activated sender domain.
 3. Store the recipient as environment secret `MONITOR_ALERT_TO` in the existing
-   GitHub `cloudflare-staging` environment. It is omitted from public source.
-4. Run **Deploy Cloudflare monitor** from `migration/cloudflare-owned`.
+   GitHub `production` environment. It is omitted from public source.
+4. Run **Deploy Cloudflare monitor** from `main`.
    The workflow validates in one runner and deploys in a fresh runner using the
    configured deployment credential. That credential must include access to
    `hacker-times-monitor`; a token scoped only to `hacker-times-production`
@@ -48,7 +48,7 @@ General Email Sending to arbitrary recipients is a different, paid feature.
    tick in monitor logs. API acceptance alone is not proof of inbox delivery.
 
 The monitor workflow must exist on the default branch for manual dispatch and
-also on the approved deployment branch. Routine updates preserve the monitor's
+runs only from `main`. Routine updates preserve the monitor's
 Durable Object namespace and state. The source config intentionally omits the
 private recipient; use the deployment script rather than deploying that config
 unchanged. No email destination or token should be committed to the repository.
