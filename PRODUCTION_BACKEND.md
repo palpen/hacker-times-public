@@ -301,6 +301,12 @@ still determines whether the supplied evidence supports a faithful summary;
 HTML success alone is never sufficient. Invalid image metadata only omits the
 image, rather than discarding usable article text.
 
+When the incumbent lead loses usable source evidence, its validated original HN
+title and empty unavailable summaries take precedence over preserving its previous
+rewritten headline. The edition can publish without changing the pinned lead
+identity, retirement history, or any previously published edition. Available
+incumbent copy continues to preserve its headline.
+
 Source records and published `articleStatus` now distinguish:
 
 - `fetch_body_too_large`, `fetch_timeout`, `fetch_body_timeout`, `fetch_body_error`

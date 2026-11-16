@@ -145,6 +145,31 @@ test('future editions preserve incumbent headline and retire replaced article/re
  const items=pool(at+90_000,200);items[0]={...items[0],url:one.selectedStories[0].url,score:10000,comments:10000};
  const four=snapshot(root,at+90_000,items);assert.notEqual(four.selectedStories[0].id,items[0].id);
 });
+test('unavailable incumbent and its repost publish the original title without blocking or changing the lead plan',async()=>{
+ for(const repost of [false,true]){
+  const s=await setup(),at=Date.now()-120_000,items=pool(at);
+  const first=snapshot(await s.call('root'),at,items);
+  await s.call('snapshot',{snapshot:first});
+  for(const row of first.selectedStories)await s.call('stage',await author(s,first,row,row.placement==='lead'?{headline:'A previously verified fictional headline'}:{}));
+  await s.call('validate',{generatedAt:first.generatedAt});await s.call('publish',{generatedAt:first.generatedAt});
+  const prior=await s.call('edition'),root=await s.call('root');
+  const nextItems=structuredClone(items);
+  if(repost)nextItems[0]={...nextItems[0],id:999,title:'A fictional repost title'};
+  const next=snapshot(root,at+30_000,nextItems);
+  assert.equal(next.nextLedger.active.key,root.ledger.active.key);
+  assert.equal(next.selectedStories[0].id,nextItems[0].id);
+  await s.call('snapshot',{snapshot:next});
+  for(const row of next.selectedStories)await s.call('stage',await author(s,next,row,row.placement==='lead'?{summarySource:'unavailable',summary:'',shortSummary:'',articleStatus:'insufficient_source_text'}:{},row.placement==='lead'?{excerpt:'',description:'',status:'insufficient_source_text'}:{}));
+  assert.equal((await s.call('validate',{generatedAt:next.generatedAt})).valid,true);
+  await s.call('publish',{generatedAt:next.generatedAt});
+  const saved=await s.call('edition'),lead=saved.edition.stories[0];
+  assert.equal(lead.headline,nextItems[0].title);assert.equal(lead.summarySource,'unavailable');assert.equal(lead.summary,'');assert.equal(lead.shortSummary,'');
+  assert.deepEqual(saved.edition.stories.map(row=>row.id),next.selectedStories.map(row=>row.id));
+  assert.deepEqual((await s.call('root')).ledger,next.nextLedger);
+  assert.equal((await s.call('status')).pending,null);
+  assert.deepEqual(await s.call('edition',{version:prior.version}),prior);
+ }
+});
 test('HN edits to the active lead URL publish fresh evidence and retire every former URL',async()=>{
  const s=await setup(),at=Date.now()-240_000,items=pool(at),originalUrl=items[0].url;
  async function publish(f,unavailable=false){await s.call('snapshot',{snapshot:f});for(const row of f.selectedStories)await s.call('stage',await author(s,f,row,unavailable&&row.placement==='lead'?{summarySource:'unavailable',summary:'',shortSummary:''}:{}));await s.call('validate',{generatedAt:f.generatedAt});return s.call('publish',{generatedAt:f.generatedAt});}

@@ -56,10 +56,8 @@ async function checkedEdition(store:Store,s:Snapshot,root:Root){
  const prior=root.version==='empty'?null:await readBlob<Publication>(store,'version/'+root.version);
  if(root.version!=='empty'&&!prior)throw new RequestError('Current edition missing; recovery required',503);
  const edition=validateEdition({generatedAt:s.generatedAt,stories:records.map(r=>r.story)},prior?.edition,s,true);
- if(root.ledger.active?.key===s.nextLedger.active?.key&&prior){
-  const headline=prior.edition.stories[0].headline;
-  if(edition.stories[0].summarySource==='unavailable'&&headline!==edition.stories[0].title)throw new RequestError('Unavailable incumbent conflicts with preserved headline; review required',409);
-  edition.stories[0].headline=headline;
+ if(root.ledger.active?.key===s.nextLedger.active?.key&&prior&&edition.stories[0].summarySource!=='unavailable'){
+  edition.stories[0].headline=prior.edition.stories[0].headline;
  }
  const highlights=await store.get<DiscussionSnapshot>(discussionKey(s.generatedAt));
  if(highlights){
