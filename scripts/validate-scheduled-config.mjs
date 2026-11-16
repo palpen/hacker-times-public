@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
-import {validateDispatchContext, validateStagingConfig} from './validate-staging-config.mjs';
+import {validateDispatchContext, validateReleaseContext, validateStagingConfig} from './validate-staging-config.mjs';
 
 const flags = ['MUTATIONS_ENABLED', 'LIVE_FETCH_ENABLED', 'PUBLICATION_ENABLED',
   'SCHEDULE_ENABLED', 'AUTO_EDITORIAL_ENABLED', 'MODEL_API_ENABLED'];
@@ -22,10 +22,11 @@ export function validateScheduledConfig(config) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== '--github')) {
-      throw new Error('Usage: node scripts/validate-scheduled-config.mjs [--github]');
+    if (process.argv.length > 3 || (process.argv[2] && !['--github', '--github-release'].includes(process.argv[2]))) {
+      throw new Error('Usage: node scripts/validate-scheduled-config.mjs [--github|--github-release]');
     }
     if (process.argv[2] === '--github') validateDispatchContext(process.env);
+    if (process.argv[2] === '--github-release') validateReleaseContext(process.env);
     let config;
     try {
       config = JSON.parse(readFileSync(new URL('../wrangler.scheduled.jsonc', import.meta.url), 'utf8'));

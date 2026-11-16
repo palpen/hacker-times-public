@@ -161,7 +161,8 @@ Cloudflare 1010 access denial.
 ## Production release controls
 
 The application now releases from `main` through **Deploy production**. Automatic
-checks run on pull requests and pushes to `main`; releases remain manual. The
+checks run on pull requests and pushes to `main`; every main update automatically
+deploys after its release validation passes. Manual deployment retries remain available. The
 separate **Pause automatic publishing** and **Resume automatic publishing** controls
 affect this same live Worker. There is no separate staging website.
 

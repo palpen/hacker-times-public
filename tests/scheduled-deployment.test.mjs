@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {validateDispatchContext, validateReleaseContext} from '../scripts/validate-staging-config.mjs';
 import {load} from 'js-yaml';
 import {validateScheduledConfig} from '../scripts/validate-scheduled-config.mjs';
 import {deployScheduledVersion, validateLiveTriggers, uploadedVersion, verifyDeployment} from '../scripts/deploy-scheduled-version.mjs';
@@ -35,22 +37,22 @@ test('scheduled deployment preserves authority and caps while enabling one half-
 });
 
 test('scheduled and pause deployments serialize against the same Worker with isolated credentials', () => {
-  assert.deepEqual(workflow.on, {workflow_dispatch: null});
+  assert.deepEqual(workflow.on, {push:{branches:['main']}, workflow_dispatch: null});
   assert.deepEqual(workflow.permissions, {contents: 'read'});
   assert.deepEqual(workflow.concurrency, staging.concurrency);
   assert.equal(workflow.jobs.validate.environment, undefined);
   assert.equal(workflow.jobs.deploy.environment, staging.jobs.deploy.environment);
   assert.equal(workflow.jobs.deploy.needs, 'validate');
   for (const [name, job] of Object.entries(workflow.jobs)) {
-    assert.equal(job.if, staging.jobs[name].if);
-    assert.deepEqual(job.steps.filter(s => s.uses), staging.jobs[name].steps.filter(s => s.uses));
+    assert.equal(job.if, "(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
+    assert.deepEqual(job.steps.filter(s => s.uses).map(({uses,with: options})=>({uses,with:options})), staging.jobs[name].steps.filter(s => s.uses).map(({uses,with: options})=>({uses,with:options})));
     assert.equal(job.steps.some(s => s['continue-on-error']), false);
   }
   const steps = workflow.jobs.deploy.steps;
   assert.deepEqual(steps.at(-1).env, staging.jobs.deploy.steps.at(-1).env);
   assert.match(steps.at(-1).run, /node scripts\/deploy-scheduled-version\.mjs/);
   for (const step of [...workflow.jobs.validate.steps, ...steps.slice(0, -1)]) assert.equal(step.env, undefined);
-  assert.match(steps.at(-2).run, /validate-scheduled-config\.mjs --github/);
+  assert.match(steps.at(-2).run, /validate-scheduled-config\.mjs --github-release/);
   assert.match(steps.at(-2).run, /git diff --exit-code/);
   assert.match(workflow.jobs.validate.steps.find(s => /dry-run/.test(s.run)).run, /--config wrangler\.scheduled\.jsonc/);
 });
@@ -141,7 +143,7 @@ test('automatic checks have no deployment credentials or production mutations', 
   assert.match(text, /node --test tests\/\*\.test\.mjs/);
 });
 
-test('all manual production controls share main-only restrictions and serialization', () => {
+test('automatic releases and manual controls share main-only restrictions and serialization', () => {
   for (const [file, name, operation] of [
     ['deploy-production.yml', 'Deploy production', 'deploy'],
     ['pause-publishing.yml', 'Pause automatic publishing', 'pause'],
@@ -149,13 +151,49 @@ test('all manual production controls share main-only restrictions and serializat
   ]) {
     const control = readWorkflow(file);
     assert.equal(control.name, name);
-    assert.deepEqual(control.on, {workflow_dispatch:null});
+    assert.deepEqual(control.on, operation === 'deploy' ? {push:{branches:['main']}, workflow_dispatch:null} : {workflow_dispatch:null});
     assert.deepEqual(control.concurrency, {group:'hacker-times-production', 'cancel-in-progress':false});
     assert.equal(control.jobs.deploy.environment, 'production');
     assert.equal(control.jobs.deploy.needs, 'validate');
     for (const job of Object.values(control.jobs)) {
-      assert.equal(job.if, "github.event_name == 'workflow_dispatch' && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
+      const event = operation === 'deploy' ? "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" : "github.event_name == 'workflow_dispatch'";
+      assert.equal(job.if, event + " && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
     }
     assert.match(control.jobs.deploy.steps.at(-1).run, new RegExp('deploy-scheduled-version\\.mjs '+operation));
+  }
+});
+
+const releaseContext = event => ({GITHUB_EVENT_NAME:event, GITHUB_REPOSITORY:'palpen/hacker-times-public', GITHUB_REF:'refs/heads/main', GITHUB_SHA:'a'.repeat(40)});
+
+test('only main pushes and manual main releases can deploy; publishing controls remain manual', () => {
+  for (const event of ['push', 'workflow_dispatch']) {
+    const context = releaseContext(event);
+    assert.doesNotThrow(()=>validateReleaseContext(context));
+    for (const change of [
+      {GITHUB_REPOSITORY:'fictional-fork/hacker-times-public'},
+      {GITHUB_REF:'refs/heads/feature'}, {GITHUB_REF:'refs/pull/1/merge'},
+      {GITHUB_REF:'refs/tags/main'}, {GITHUB_REF:undefined},
+      {GITHUB_SHA:undefined}, {GITHUB_SHA:'a'.repeat(39)},
+    ]) assert.throws(()=>validateReleaseContext({...context,...change}), /approved repository main/);
+  }
+  for (const event of ['pull_request', 'pull_request_target', 'workflow_run', 'workflow_call', 'schedule', undefined]) {
+    assert.throws(()=>validateReleaseContext(releaseContext(event)), /push or manual dispatch/);
+  }
+  assert.throws(()=>validateDispatchContext(releaseContext('push')), /manual dispatch/);
+  assert.doesNotThrow(()=>validateDispatchContext(releaseContext('workflow_dispatch')));
+});
+
+test('CLI permits automatic release validation without permitting automatic pause or resume', () => {
+  const env = {...process.env,...releaseContext('push'),CLOUDFLARE_API_TOKEN:''};
+  const run = args => spawnSync(process.execPath, args, {env,encoding:'utf8'});
+  assert.equal(run(['scripts/validate-scheduled-config.mjs','--github-release']).status, 0);
+  assert.equal(run(['scripts/validate-scheduled-config.mjs','--github']).status, 1);
+  const deploy = run(['scripts/deploy-scheduled-version.mjs','deploy']);
+  assert.equal(deploy.status, 1);
+  assert.match(deploy.stderr, /Cloudflare deployment credential required/);
+  for (const operation of ['pause','resume']) {
+    const result = run(['scripts/deploy-scheduled-version.mjs',operation]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /manual dispatch/);
   }
 });
