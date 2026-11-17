@@ -476,6 +476,54 @@ test('rate-limited publishers preserve selected links without invented summaries
  }finally{globalThis.fetch=old;}
 });
 
+test('automatic publisher uses the exact feed entry and pins provenance across retries',async()=>{
+ const env={LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.5',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+ const s=await setup(env),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});
+ const selected=f.selectedStories[0],args={generatedAt:f.generatedAt,id:selected.id};
+ env.NEWSROOM={idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})};
+ const evidence='The fictional archive now groups paper by color to speed up filing.';
+ const old=globalThis.fetch;let modelCalls=0,feedCalls=0;
+ try{
+  globalThis.fetch=async(url,opts)=>{
+   if(url===selected.url)return new Response('<head><link rel="alternate" type="application/rss+xml" href="/news.rss"></head><main><h1>Archive</h1></main>',{headers:{'content-type':'text/html'}});
+   if(url==='https://fictional.example/news.rss'){
+    feedCalls++;
+    return new Response('<rss><channel><item><link>'+selected.url+'</link><pubDate>'+f.generatedAt+'</pubDate><description>'+evidence+'</description></item></channel></rss>');
+   }
+   assert.equal(url,'https://api.openai.com/v1/responses');modelCalls++;
+   const input=JSON.parse(JSON.parse(opts.body).input[0].content[0].text);
+   assert.deepEqual(input,{originalTitle:selected.title,evidenceKind:'publisher_feed',sourceText:evidence});
+   return Response.json({status:'completed',usage:{input_tokens:50,output_tokens:30,total_tokens:80},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:selected.title,summary:evidence,shortSummary:evidence,summarySource:'publisher_feed'})}]}]});
+  };
+  await api.summarize(env,args);await api.summarize(env,args);
+  const record=await s.storage.get('stage/'+f.generatedAt+'/'+selected.id),source=await s.call('get-source',args);
+  assert.equal(record.story.summarySource,'publisher_feed');assert.equal(record.story.url,selected.url);
+  assert.equal(source.status,'insufficient_source_text');assert.equal(source.feedUrl,'https://fictional.example/news.rss');
+  assert.equal(record.sourceFingerprint,source.fingerprint);assert.equal(feedCalls,1);assert.equal(modelCalls,1);
+ }finally{globalThis.fetch=old;}
+});
+
+test('published tutorial copy survives a later failed fetch without a paid call or stale metrics',async()=>{
+ const s=await setup(),t=Date.now()-3600000,items=pool(t);
+ items[1].title='Understanding fictional paper sorting';
+ const old=snapshot(await s.call('root'),t,items);await s.call('snapshot',{snapshot:old});
+ for(const row of old.selectedStories)await s.call('stage',await author(s,old,row));
+ await s.call('validate',{generatedAt:old.generatedAt});const pub=await s.call('publish',{generatedAt:old.generatedAt});
+ items[1].score+=1;
+ const fresh=snapshot(await s.call('root'),t+30000,items);await s.call('snapshot',{snapshot:fresh});
+ const selected=fresh.selectedStories.find(row=>row.title===items[1].title),args={id:selected.id,generatedAt:fresh.generatedAt};
+ const source={...args,kind:'unavailable',excerpt:'',description:'',url:selected.url,fetchedAt:fresh.generatedAt,status:'unavailable_http_403'};
+ source.fingerprint=await api.digest(source);await s.call('source',{source,generatedAt:fresh.generatedAt});
+ const env={LIVE_FETCH_ENABLED:'true',NEWSROOM:{idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})}};
+ const budget=(await s.call('status')).modelBudget;
+ await api.summarize(env,args);await api.summarize(env,args);
+ const record=await s.storage.get('stage/'+fresh.generatedAt+'/'+selected.id),pinned=await s.call('get-source',args);
+ assert.equal(record.story.summarySource,'archived_summary');assert.equal(pinned.archive.version,pub.version);
+ assert.equal(pinned.archive.generatedAt,old.generatedAt);assert.equal(record.story.score,selected.score);
+ assert.equal(record.story.summary,'A fictional system demonstrates a synthetic operation.');
+ assert.deepEqual((await s.call('status')).modelBudget,budget);
+});
+
 test('corrected validation reuses a retained draft without another model charge or request',async()=>{
  const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});const row=f.selectedStories[0];await author(s,f,row);
  const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});

@@ -8,8 +8,8 @@ import {build} from 'esbuild';
 
 const directory=fs.mkdtempSync(path.join(os.tmpdir(),'ht-article-source-'));
 const output=path.join(directory,'source.mjs');
-await build({stdin:{contents:`export {safeFetch,article,MAX_ARTICLE_HTML_BYTES} from './lib/reporting';export {collectionFailure} from './lib/collection-error';export {collectSource} from './lib/production/collect';export {generateEditorialCopy} from './lib/production/editorial-model';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:output});
-const {safeFetch,article,MAX_ARTICLE_HTML_BYTES,collectSource,generateEditorialCopy,collectionFailure}=await import(pathToFileURL(output));
+await build({stdin:{contents:`export {ArchiveCopies} from './lib/production/archived-copy';export {writeBlob} from './lib/production/storage';export {readPublisherFeed,matchPublisherFeed,publisherFeedUrl} from './lib/production/publisher-feed';export {safeFetch,article,MAX_ARTICLE_HTML_BYTES} from './lib/reporting';export {collectionFailure} from './lib/collection-error';export {collectSource} from './lib/production/collect';export {generateEditorialCopy} from './lib/production/editorial-model';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:output});
+const {ArchiveCopies,writeBlob,readPublisherFeed,matchPublisherFeed,publisherFeedUrl,safeFetch,article,MAX_ARTICLE_HTML_BYTES,collectSource,generateEditorialCopy,collectionFailure}=await import(pathToFileURL(output));
 const originalFetch=globalThis.fetch;
 test.after(()=>{globalThis.fetch=originalFetch;fs.rmSync(directory,{recursive:true,force:true});});
 const url='https://fictional.example/story';
@@ -83,6 +83,29 @@ test('empty app and repository shells preserve the title without a model request
  }
 });
 
+test('article bodies outrank related cards and exclude discussion and signup text',async()=>{
+ const articleText=prose.repeat(3);
+ globalThis.fetch=async()=>htmlResponse('<main><p>'+articleText+'</p><article><a><h3>Other headline</h3></a>Yesterday</article><article><a>Elsewhere</a>Tuesday</article></main>');
+ assert.equal((await article(url)).excerpt,articleText);
+ globalThis.fetch=async()=>htmlResponse('<article class="typography newsletter-post post"><p>'+articleText+'</p><div class="newsletter-signup">Subscribe to another publication</div></article><section id="discussion"><article>'+prose.repeat(8)+'</article></section>');
+ assert.equal((await article(url)).excerpt,articleText);
+ globalThis.fetch=async()=>htmlResponse('<main><article>'+prose+'</article><article>'+prose+' More teaser copy.</article></main>');
+ assert.equal((await article(url)).excerpt,'');
+});
+test('exact feed links preserve article identity, date, publisher origin and ambiguity checks',()=>{
+ const when='2026-11-17T12:00:00Z',key='https://fictional.example/article?id=15';
+ const atom=(link,text,date=when)=>'<entry><link rel="self" href="https://example.org/api/entry"/><link rel="alternate" href="'+link+'"/><updated>'+date+'</updated><summary>'+text+'</summary></entry>';
+ const feed=(entries)=>readPublisherFeed('<feed>'+entries+'</feed>');
+ const exact=atom(key+'&amp;utm_source=feed',prose);
+ assert.equal(matchPublisherFeed(feed(exact),key,when),prose);
+ assert.equal(matchPublisherFeed(feed(exact),key.replace('15','16'),when),undefined);
+ assert.equal(matchPublisherFeed(feed(atom(key,prose,'2026-11-18T00:00:00Z')),key,when),undefined);
+ assert.equal(matchPublisherFeed(feed(exact+atom(key,prose+' Different conclusion.')),key,when),undefined);
+ assert.equal(publisherFeedUrl(key,'https://elsewhere.example/rss'),undefined);
+ assert.equal(publisherFeedUrl(key,'/feed'),'https://fictional.example/feed');
+ assert.equal(publisherFeedUrl('https://www.nytimes.com/2026/11/17/upshot/example.html'),'https://rss.nytimes.com/services/xml/rss/nyt/Upshot.xml');
+});
+
 test('generic Open Graph metadata does not hide a descriptive standard meta tag',async()=>{
  globalThis.fetch=async()=>htmlResponse(`<head><title>Finch</title><meta property="og:description" content="Finch"><meta name="description" content="${prose}"></head><body><h1>Finch</h1></body>`);
  const source=await article(url);assert.equal(source.excerpt,'');assert.equal(source.description,prose);
@@ -138,5 +161,20 @@ test('publisher restrictions and unsupported formats stay explicit without retri
  for(const type of ['application/pdf','text/plain','text/html-invalid']){
   globalThis.fetch=async()=>new Response('Unsupported',{headers:{'content-type':type}});
   assert.equal((await article(url)).articleStatus,'non_html');
+ }
+});
+
+test('archive reuse expires at the original verification time and requires matching identity',async()=>{
+ const index=new ArchiveCopies(),map=new Map(),store={get:async k=>map.get(k),put:async(k,v)=>map.set(k,v)};
+ const candidate={...selected,title:'Understanding paper sorting',url:'https://fictional.example/tutorial/paper-sorting'};
+ const copy={version:'first',generatedAt:'2026-11-13T12:00:00.000Z',headline:candidate.title,shortSummary:prose,summary:prose,publisher:'Fictional archive'};
+ const edition={generatedAt:'2026-11-15T12:00:00.000Z',stories:[{...candidate,...copy,summarySource:'archived_summary'}]};
+ await writeBlob(store,'version/reused',{edition});
+ await store.put('source/'+edition.generatedAt+'/'+candidate.id,{archive:copy});
+ const root={version:'reused',archives:{'2026-11-15':'reused'}};
+ assert.deepEqual(await index.find(store,root,candidate,'2026-11-16T11:59:00.000Z'),copy);
+ assert.equal(await index.find(store,root,candidate,'2026-11-16T12:01:00.000Z'),undefined);
+ for(const change of [{url:candidate.url+'-other'},{title:'Understanding a different project'},{title:'Understanding today’s outage'}]){
+  assert.equal(await index.find(store,root,{...candidate,...change},'2026-11-16T11:59:00.000Z'),undefined);
  }
 });

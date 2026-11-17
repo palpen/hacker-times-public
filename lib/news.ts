@@ -22,7 +22,7 @@ export function validateEdition(input:unknown,previous?:Edition,snapshot?:Source
   for(const key of ['title','headline','summary','publisher','category'] as const)if(typeof s[key]!=='string'||s[key].length>(key==='summary'?900:240))throw Error('Invalid story text.');
   if(!s.headline.trim()||!s.publisher.trim()||!Number.isSafeInteger(s.score)||!Number.isSafeInteger(s.comments)||!Number.isSafeInteger(s.time)||s.score<0||s.comments<0||s.time<=0||s.time*1000>stamp+300000)throw Error('Invalid score or submission time.');
   const source=s.summarySource,short=s.shortSummary;
-  if(source!==undefined&&!['article','page_description','hn_post','unavailable'].includes(source))throw Error('Invalid summary source.');
+  if(source!==undefined&&!['article','page_description','publisher_feed','archived_summary','hn_post','unavailable'].includes(source))throw Error('Invalid summary source.');
   if(short!==undefined&&source===undefined)throw Error('Short summary requires an explicit source.');
   if(short!==undefined&&(typeof short!=='string'||short.length>280))throw Error('Invalid short summary.');
   if(snapshot?.summaryPolicyVersion===1&&(source===undefined||short===undefined))throw Error('Summary policy requires source and short summary.');

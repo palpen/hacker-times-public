@@ -8,7 +8,7 @@ export const categories = ['Technology','AI','Software','Science','Culture','Bus
 export type Category = typeof categories[number];
 export type Placement = 'lead'|'top'|'discussion'|'section'|'section-only';
 export type Story = {
- id:number;title:string;headline:string;summary:string;summarySource?:'article'|'page_description'|'hn_post'|'unavailable';shortSummary?:string;url:string;publisher:string;
+ id:number;title:string;headline:string;summary:string;summarySource?:'article'|'page_description'|'publisher_feed'|'archived_summary'|'hn_post'|'unavailable';shortSummary?:string;url:string;publisher:string;
  score:number;comments:number;time:number;category:string;
  hnRank?:number;hnPage?:number;editorialScore?:number;placement?:Placement;topics?:Category[];discoverySource?:'current'|'history';
  image?:string|null;imageAlt?:string;imageCredit?:string;articleStatus?:string;

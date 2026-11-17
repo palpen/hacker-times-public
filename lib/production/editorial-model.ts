@@ -75,7 +75,7 @@ export function publisherFor(selected: Candidate, source?:Source): string {
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || !url.hostname) {
       return preflight('Invalid selected publisher URL');
     }
-    const publisher = source?.kind==='hn_post'?'Hacker News':source?.kind==='article'&&typeof source.publisher==='string'&&source.publisher.trim()&&source.publisher.length<=240&&!/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)?source.publisher.trim():url.hostname.replace(/^www\./, '');
+    const publisher = source?.kind==='hn_post'?'Hacker News':source&&source.kind!=='unavailable'&&typeof source.publisher==='string'&&source.publisher.trim()&&source.publisher.length<=240&&!/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)?source.publisher.trim():url.hostname.replace(/^www\./, '');
     if (publisher.length > 240) return preflight('Selected publisher name exceeds limits');
     return publisher;
   } catch {
@@ -87,7 +87,7 @@ function checkSource(source: Source, selected: Candidate): void {
     !Number.isSafeInteger(selected.id) || selected.id <= 0 ||
     !boundedString(selected.title, 240) || !selected.title.trim() ||
     !boundedString(selected.url, 2500) ||
-    !['article', 'hn_post', 'unavailable'].includes(source.kind) ||
+    !['article', 'hn_post', 'publisher_feed', 'archived_summary', 'unavailable'].includes(source.kind) ||
     !boundedString(source.excerpt, 8500) || !boundedString(source.description, 700) ||
     !boundedString(source.status, 180)) {
     preflight('Source does not match the bounded server selection');
@@ -211,7 +211,7 @@ function validateCopy(value: unknown, provenance: NonNullable<Story['summarySour
 export function reviewEditorialDraft(source:Source,selected:Candidate,draft:unknown):EditorialModelResult {
   checkSource(source,selected);
   if(source.kind==='unavailable'||(!source.excerpt.trim()&&!source.description.trim()))return preflight('Pinned source evidence required for draft review');
-  const provenance=source.kind==='hn_post'?'hn_post':source.excerpt.trim()?'article':'page_description';
+  const provenance=source.kind==='publisher_feed'?'publisher_feed':source.kind==='hn_post'?'hn_post':source.excerpt.trim()?'article':'page_description';
   const usage={inputTokens:0,outputTokens:0,totalTokens:0};
   return {story:makeStory(source,selected,publisherFor(selected,source),validateCopy(draft,provenance,selected.title,usage)),usage,requested:false};
 }
@@ -229,6 +229,11 @@ export async function generateEditorialCopy(
 ): Promise<EditorialModelResult> {
   checkSource(source, selected);
   const publisher = publisherFor(selected,source);
+  if(source.kind==='archived_summary'){
+    const copy=source.archive;
+    if(!copy)return preflight('Archived copy requires a pinned publication');
+    return {story:makeStory(source,selected,publisher,{headline:copy.headline,summary:copy.summary,shortSummary:copy.shortSummary,summarySource:'archived_summary'}),usage:{inputTokens:0,outputTokens:0,totalTokens:0},requested:false};
+  }
   const evidence = source.kind === 'unavailable' ? '' : source.kind === 'hn_post' ? source.excerpt.trim() :
     source.excerpt.trim() || source.description.trim();
   if (!evidence) {
@@ -239,7 +244,7 @@ export async function generateEditorialCopy(
     !Number.isSafeInteger(config.maxOutputTokens) || config.maxOutputTokens < 1 || config.maxOutputTokens > MAX_MODEL_OUTPUT_TOKENS) {
     return preflight('Explicit editorial model, credential and bounded output limit are required');
   }
-  const provenance = source.kind === 'hn_post' ? 'hn_post' : source.excerpt.trim() ? 'article' : 'page_description';
+  const provenance = source.kind === 'publisher_feed' ? 'publisher_feed' : source.kind === 'hn_post' ? 'hn_post' : source.excerpt.trim() ? 'article' : 'page_description';
   const request = {
     model: config.model,
     // Do not inherit a project's auto/Priority tier: budget rates cover Standard.
@@ -255,6 +260,7 @@ export async function generateEditorialCopy(
       'Use a single plain-text paragraph for each field, with no line breaks or leading/trailing spaces.',
       'Avoid hype, attribution that the source does not support, and period-containing title abbreviations in shortSummary.',
       'For page_description use only its limited factual claims; for hn_post attribute personal claims to the author when appropriate.',
+      ...(source.kind==='publisher_feed'?['The evidence is the publisher’s feed description of the exact linked article. Limit the brief to its complete factual claims, attribute judgments and forecasts, and never infer details from an incomplete sentence.']:[]),
       'Set summarySource to the supplied evidenceKind only when the evidence actually supports the copy.',
       'If evidence is insufficient, set summarySource="unavailable", headline to originalTitle exactly, and summary and shortSummary to empty strings.',
       'A safety refusal is not insufficient evidence. Never conceal a refusal by labeling it unavailable.',

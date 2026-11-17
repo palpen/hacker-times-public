@@ -1,5 +1,8 @@
 import {RequestError} from '../security';
 import {CollectionError,parseCollectionDetails} from '../collection-error';
+import {canReuseArchive} from './archived-copy';
+import {recoverFromFeed} from './publisher-feed';
+import type {Candidate} from '../contracts';
 import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
 import {generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
@@ -40,16 +43,12 @@ export async function sourceFor(env:ProductionEnv,generatedAt:unknown,id:unknown
 function positiveConfig(value:string|undefined,name:string,integer=false){
  const n=Number(value);if(!value||!Number.isFinite(n)||n<=0||(integer&&!Number.isSafeInteger(n)))throw new RequestError(name+' must be explicitly configured',503);return n;
 }
-export async function summarize(env:RunEnv,args:Record<string,unknown>){
- const {source,snapshot}=await sourceFor(env,args.generatedAt,args.id);
- const selected=snapshot.selectedStories.find(x=>x.id===source.id)!;
- const status=await call(env,'status',{generatedAt:source.generatedAt}) as {articles:{id:number;revision:number}[]};
- const staged=status.articles.find(x=>x.id===selected.id);if(staged)return {id:selected.id,revision:staged.revision,unchanged:true};
+async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
  const model=env.EDITORIAL_MODEL||'gpt-6-luna';
  const maxOutputTokens=env.MODEL_MAX_OUTPUT_TOKENS?positiveConfig(env.MODEL_MAX_OUTPUT_TOKENS,'Output token bound',true):1024;
  if(maxOutputTokens>4096)throw new RequestError('Output token bound exceeds policy',503);
  let result:Awaited<ReturnType<typeof generateEditorialCopy>>;
- if(source.kind==='unavailable')result=await generateEditorialCopy(source,selected,{apiKey:'',model,maxOutputTokens});
+ if(source.kind==='unavailable'||source.kind==='archived_summary')result=await generateEditorialCopy(source,selected,{apiKey:'',model,maxOutputTokens});
  else{
   enabled(env.MODEL_API_ENABLED,'Model API');if(!env.OPENAI_API_KEY)throw new RequestError('OpenAI credential is not configured',503);
   const inputPrice=positiveConfig(env.MODEL_INPUT_USD_PER_MILLION,'Verified input price'),outputPrice=positiveConfig(env.MODEL_OUTPUT_USD_PER_MILLION,'Verified output price');
@@ -80,6 +79,28 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
    }
    await call(env,'model-complete',{key,result,actualCost:Math.ceil(result.usage.inputTokens*inputPrice+result.usage.outputTokens*outputPrice)});
   }
+ }
+ return result;
+}
+export async function summarize(env:RunEnv,args:Record<string,unknown>){
+ const initial=await sourceFor(env,args.generatedAt,args.id);
+ let {source}=initial;
+ const selected=initial.snapshot.selectedStories.find(x=>x.id===source.id)!;
+ const status=await call(env,'status',{generatedAt:source.generatedAt}) as {articles:{id:number;revision:number}[]};
+ const staged=status.articles.find(x=>x.id===selected.id);if(staged)return {id:selected.id,revision:staged.revision,unchanged:true};
+ let result=await writeCopy(env,source,selected);
+ // Only an explicit insufficient-evidence outcome reaches recovery. Provider,
+ // safety, budget and transport failures retain their original workflow.
+ if(result.story.summarySource==='unavailable'&&source.kind!=='hn_post'&&source.kind!=='publisher_feed'&&
+    !['unavailable_http_404','unavailable_http_410','fetch_url_rejected'].includes(source.status)){
+  const pin={generatedAt:source.generatedAt,id:source.id,sourceFingerprint:source.fingerprint};
+  let recovered:Source|null=null;
+  if(source.kind==='unavailable'&&canReuseArchive(selected))recovered=await call(env,'recover-archive',pin) as Source|null;
+  if(!recovered){
+   const feed=await recoverFromFeed(selected.url,source.generatedAt,source.feedUrl);
+   if(feed)recovered=await call(env,'recover-feed',{...pin,...feed}) as Source;
+  }
+  if(recovered){source=recovered;result=await writeCopy(env,source,selected);}
  }
  // The Sites newspaper uses concise decks. Reuse the fully authored compact
  // sentence rather than clipping the long summary or making another API call.

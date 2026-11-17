@@ -301,6 +301,20 @@ still determines whether the supplied evidence supports a faithful summary;
 HTML success alone is never sufficient. Invalid image metadata only omits the
 image, rather than discarding usable article text.
 
+The scheduled publisher can recover an unavailable summary from an RSS or Atom
+entry whose article URL matches the selected story. It checks a same-origin feed
+declared by the page or a known publisher feed. The entry must have a usable
+description and a timestamp at or before the snapshot. Ambiguous matches are
+discarded. A feed summary uses the existing editorial model and spending limits.
+
+For an unreadable tutorial or explainer, the newsroom can reuse fully sourced
+copy from a published edition within the preceding 72 hours. The title and
+article URL must match. Live, time-sensitive and removed pages are excluded.
+Reusing copy preserves the original verification date and requires no model call.
+The public edition records `publisher_feed` or `archived_summary` as the summary
+source and retains the original retrieval status in `articleStatus`. Model and
+budget errors continue through the existing failure handling.
+
 When the incumbent lead loses usable source evidence, its validated original HN
 title and empty unavailable summaries take precedence over preserving its previous
 rewritten headline. The edition can publish without changing the pinned lead

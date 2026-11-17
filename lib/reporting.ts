@@ -45,7 +45,8 @@ export async function safeFetch(url:string):Promise<{response:Response;finalUrl:
  }
  throw new SourceFetchError('fetch_redirect_limit');
 }
-export async function article(url:string,options:{fullText?:boolean;originalTitle?:string}={}){
+type ArticleResult={articleStatus:string;excerpt:string;imageCandidates:string[];articlePublishedAt?:string|null;pageTitle?:string;description?:string;publisher?:string;feedUrl?:string};
+export async function article(url:string,options:{fullText?:boolean;originalTitle?:string}={}):Promise<ArticleResult>{
  let response:Response|undefined,readingBody=false;
  try{
   const fetched=await safeFetch(url);response=fetched.response;
@@ -57,9 +58,14 @@ export async function article(url:string,options:{fullText?:boolean;originalTitl
   const source=extractArticleHtml(html,options);
   // Broken optional image metadata must never discard otherwise usable text.
   let image='';try{if(source.image)image=new URL(source.image,fetched.finalUrl).href;}catch{/* Omit invalid metadata. */}
+  let feedUrl:string|undefined;
+  if(source.alternateFeed)try{
+   const feed=new URL(source.alternateFeed,fetched.finalUrl);
+   if(feed.protocol==='https:'&&feed.origin===new URL(url).origin&&publicFetchUrl(feed.href))feedUrl=feed.href;
+  }catch{/* Ignore invalid discovery metadata. */}
   const {excerpt,description,pageTitle,publisher}=source;
   const available=!!(excerpt||description);
-  return {articleStatus:available?'fetched':'insufficient_source_text',articlePublishedAt:extractPublicationDate(html,fetched.finalUrl),pageTitle,description,publisher,excerpt,
+  return {articleStatus:available?'fetched':'insufficient_source_text',articlePublishedAt:extractPublicationDate(html,fetched.finalUrl),pageTitle,description,publisher,excerpt,...(feedUrl?{feedUrl}:{}),
    imageCandidates:available&&image&&publicUrl(image)?[image]:[]};
  }catch(error){
   void response?.body?.cancel().catch(()=>{});
