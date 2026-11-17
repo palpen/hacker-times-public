@@ -27,6 +27,8 @@ export type Root = {
 };
 export type Snapshot = SourceSnapshot & {baseRevision:number; nextLedger:Ledger; leadAudit:BalancedLeadResult};
 export type Publication = {version:string; edition:Edition; html:string};
-export type Source = {id:number; generatedAt:string; fingerprint:string; kind:'article'|'hn_post'|'unavailable'; excerpt:string; description:string; publisher?:string; imageCandidate?:string; url:string; fetchedAt:string; status:string};
+export type Source = {id:number; generatedAt:string; fingerprint:string; kind:'article'|'hn_post'|'publisher_feed'|'archived_summary'|'unavailable'; feedUrl?:string; archive?:ArchivedCopy; excerpt:string; description:string; publisher?:string; imageCandidate?:string; url:string; fetchedAt:string; status:string};
 export type Staged = {revision:number; story:Edition['stories'][number]; sourceFingerprint:string; imageReviewKey?:string};
 export type CandidateBatch = {generatedAt:string; rankedStories:Candidate[]; selectedStories:Candidate[]};
+
+export type ArchivedCopy = {version:string; generatedAt:string; headline:string; summary:string; shortSummary:string; publisher:string};

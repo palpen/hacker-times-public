@@ -8,6 +8,8 @@ import {CollectionError,parseCollectionDetails} from '../collection-error';
 import {pinSnapshot} from './selection';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
 import {parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
+import {ArchiveCopies} from './archived-copy';
+import {publisherFeedUrl} from './publisher-feed';
 import {runEdition} from './runner';
 import {observeRun} from './run-log';
 import {importArchive} from './archive-import';
@@ -69,6 +71,7 @@ async function checkedEdition(store:Store,s:Snapshot,root:Root){
 // Only reachable through the private namespace binding. Public requests never
 // forward editorial operations; the scheduler and alarm workflow use them internally.
 export class Newsroom {
+ private archiveCopies=new ArchiveCopies();
  constructor(private state:DurableObjectState,private env?:ProductionEnv){
   state.blockConcurrencyWhile(async()=>{await state.storage.transaction(async tx=>{
    const exists=await tx.get('initialized');if(exists){await rootAt(tx);return;}
@@ -114,7 +117,7 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch','/image-next','/image-done'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/recover-archive','/recover-feed','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch','/image-next','/image-done'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
     }
     if(path==='/collect-items'){
      hold(root);
@@ -284,12 +287,34 @@ export class Newsroom {
     }
     if(path==='/source'){
      const source=args.source as Source;
+     if(source?.archive!==undefined||source?.feedUrl!==undefined&&(typeof source.feedUrl!=='string'||publisherFeedUrl(source.url,source.feedUrl)!==source.feedUrl))throw new RequestError('Invalid source recovery metadata');
      if(source?.publisher!==undefined&&(typeof source.publisher!=='string'||source.publisher.length>240||/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(source.publisher)))throw new RequestError('Invalid source publisher');
      if(source?.imageCandidate!==undefined&&(source.kind!=='article'||!publicFetchUrl(source.imageCandidate)))throw new RequestError('Invalid publisher image candidate');
      if(!source||source.generatedAt!==at||!s.selectedStories.some(x=>x.id===source.id&&x.url===source.url)||!['article','hn_post','unavailable'].includes(source.kind)||source.excerpt.length>8500||source.description.length>700||source.fingerprint!==await digest({...source,fingerprint:undefined}))throw new RequestError('Invalid source record');
      const key=sourceKey(at,source.id),existing=await tx.get<Source>(key);
      if(existing&&existing.fingerprint!==source.fingerprint)throw new RequestError('Source already saved; use existing verified work',409);
      if(!existing)await tx.put(key,source);return existing??source;
+    }
+    if(path==='/recover-archive'||path==='/recover-feed'){
+     const selected=s.selectedStories.find(row=>row.id===args.id);
+     if(!selected)throw new RequestError('Article is not selected');
+     const key=sourceKey(at,selected.id),original=await tx.get<Source>(key);
+     if(!original)throw new RequestError('Pinned source required',409);
+     if(original.kind==='publisher_feed'||original.kind==='archived_summary')return original;
+     if(original.fingerprint!==args.sourceFingerprint||original.kind==='hn_post'||await tx.get(stageKey(at,selected.id)))throw new RequestError('Recovery source changed',409);
+     let recovered:Omit<Source,'fingerprint'>;
+     const base={id:selected.id,generatedAt:at,url:selected.url,fetchedAt:original.fetchedAt,status:original.status,excerpt:'',description:''};
+     if(path==='/recover-archive'){
+      const archive=await this.archiveCopies.find(tx,root,selected,at);
+      if(!archive)return null;
+      recovered={...base,kind:'archived_summary',archive,publisher:archive.publisher};
+     }else{
+      const feedUrl=publisherFeedUrl(selected.url,original.feedUrl);
+      if(!feedUrl||args.feedUrl!==feedUrl||typeof args.description!=='string'||!args.description.trim()||args.description.length>700)throw new RequestError('Invalid publisher feed evidence');
+      recovered={...base,kind:'publisher_feed',feedUrl,description:args.description,...(original.publisher?{publisher:original.publisher}:{})};
+     }
+     const pinned={...recovered,fingerprint:await digest(recovered)};
+     await tx.put(key,pinned);return pinned;
     }
     if(path==='/get-source'){
      if(!s.selectedStories.some(x=>x.id===args.id))throw new RequestError('Article is not selected');
@@ -301,7 +326,12 @@ export class Newsroom {
      if(story.image)throw new RequestError('Images require a separate visual verification workflow; omit for now');
      const source=await tx.get<Source>(sourceKey(at,story.id));
      if(!source||source.fingerprint!==args.sourceFingerprint)throw new RequestError('Pinned source evidence required');
-     if(story.summarySource!=='unavailable'&&((story.summarySource==='hn_post'&&source.kind!=='hn_post')||(story.summarySource==='article'&&(source.kind!=='article'||!source.excerpt.trim()))||(story.summarySource==='page_description'&&(source.kind!=='article'||!source.description.trim()))||source.kind==='unavailable'))throw new RequestError('Summary provenance does not match source');
+     if(story.summarySource!=='unavailable'){
+      const provenance=story.summarySource;
+      const matches=source.kind==='article'?(provenance==='article'&&source.excerpt.trim()||provenance==='page_description'&&source.description.trim()):source.kind===provenance;
+      if(!matches)throw new RequestError('Summary provenance does not match source');
+      if(provenance==='archived_summary'&&(!source.archive||story.headline!==source.archive.headline||story.summary!==source.archive.shortSummary||story.shortSummary!==source.archive.shortSummary))throw new RequestError('Archived copy differs from its publication');
+     }
      validateEdition({generatedAt:at,stories:[story]});
      if(story.summarySource===undefined||story.shortSummary===undefined||new TextEncoder().encode(JSON.stringify(story)).length>24_000)throw new RequestError('Explicit bounded summary fields required');
      const key=stageKey(at,story.id),old=await tx.get<Staged>(key);
