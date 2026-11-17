@@ -1,5 +1,5 @@
 import {RequestError} from '../security';
-import {CollectionError,parseCollectionDetails} from '../collection-error';
+import {CollectionError,parseCollectionDetails,type CollectionDetails} from '../collection-error';
 import {canReuseArchive} from './archived-copy';
 import {recoverFromFeed} from './publisher-feed';
 import type {Candidate} from '../contracts';
@@ -114,13 +114,22 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
  enabled(env.AUTO_EDITORIAL_ENABLED,'Automatic editorial workflow');
  enabled(env.MUTATIONS_ENABLED,'Mutations');
  const execution:RunEnv={...env,...(localRequest?{_localRequest:localRequest}:{})};
- const claim=await call(execution,'run-claim') as {claimed:boolean;token:string};
- if(!claim.claimed)return {published:false,busy:true};
+ const claim=await call(execution,'run-claim') as {claimed:boolean;token:string;collectionDeferred?:boolean};
+ if(!claim.claimed)return {published:false,...(claim.collectionDeferred?{checkpoint:'collection_wait'}:{busy:true})};
  const scoped:RunEnv={...execution,_runToken:claim.token},started=Date.now();let continuationDelayMs=30*60_000;
+ let collectionFailure:{httpStatus:number;details:CollectionDetails|null}|undefined;
  try{
   const status=await call(scoped,'status') as {pending:string|null};
   // Collection is its own checkpoint: never combine it with an editorial batch.
-  if(!status.pending){const snapshot=await collect(scoped);continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'collected'};}
+  if(!status.pending){
+   try{const snapshot=await collect(scoped);continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'collected'};}
+   catch(error){
+    // No pinned batch exists yet, so the ordinary pending-batch alarm cannot
+    // recover this failure. Retain fixed diagnostics and let storage bound retries.
+    collectionFailure={httpStatus:error instanceof RequestError?error.status:500,details:error instanceof CollectionError?parseCollectionDetails(error.details):null};
+    throw error;
+   }
+  }
   const snapshot=await call(scoped,'selection',{generatedAt:status.pending}) as Snapshot;
   const before=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[];cursor:number|null};
   const allIds=snapshot.selectedStories.map(x=>x.id),cursor=before.cursor===null?-1:allIds.indexOf(before.cursor);
@@ -159,5 +168,5 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   const publication=await call(scoped,'publish',{generatedAt:snapshot.generatedAt});
   const persisted=await call(scoped,'edition') as Publication;
   return {publication,verifiedVersion:persisted.version,generatedAt:persisted.edition.generatedAt};
- }finally{await call(scoped,'run-release',{continuationDelayMs});}
+ }finally{await call(scoped,'run-release',{continuationDelayMs,...(collectionFailure?{collectionFailure}:{})});}
 }

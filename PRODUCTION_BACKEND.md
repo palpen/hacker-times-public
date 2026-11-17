@@ -224,6 +224,22 @@ Completion or a safety hold cancels continuations. Alarm retries use the same le
 source evidence, stage checkpoints and no-replay model reservations. Disabling the
 schedule switch prevents alarm execution as well as cron execution.
 
+Metadata collection can fail before any pending snapshot exists. Those failures
+now retain private `runner.collectionFailure` diagnostics: the originating cron
+slot, failure count/time, generic HTTP status, allowlisted collection details,
+planned retry time and collection recovery time. No response bodies, URLs or
+credentials are stored. Recovery here means a new snapshot was saved, not that
+publication finished; public readiness still uses the published source timestamp.
+
+Transport failures and upstream HTTP 408, 429 or 5xx responses get at most two
+additional metadata attempts, one minute apart, in fresh invocations. Durable
+state fences early/duplicate alarm deliveries and exhausted attempts until a new
+cron slot. Successful collection resumes the ordinary validation/publication
+checkpoints. Invalid payloads, content types, request limits, authorization errors,
+safety holds and uncertain model outcomes are not retried by this mechanism.
+These retries address a reproduced pre-snapshot recovery gap; they do not establish
+the cause of the November 17 production gaps without the corresponding run logs.
+
 ## Cloudflare model transport regression (2026-11-12)
 
 The original model adapter set Fetch `redirect: 'error'`. Cloudflare Workers
