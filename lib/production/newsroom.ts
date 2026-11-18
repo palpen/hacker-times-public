@@ -142,7 +142,7 @@ export class Newsroom {
     if(!safetyReport){
      const lease=await tx.get<{token:string;expiresAt:number}>('run/lease');
      if(args._runToken!==undefined&&(!lease||lease.token!==args._runToken||lease.expiresAt<=Date.now()))throw new RequestError('Runner lease expired or superseded',409);
-     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/recover-archive','/recover-feed','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/run-progress','/prepare-discussions','/save-discussion-batch','/image-next','/image-done'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
+     if(lease&&lease.expiresAt>Date.now()&&args._runToken!==lease.token&&['/collect-items','/snapshot','/source','/recover-archive','/recover-feed','/stage','/validate','/publish','/model-reserve','/model-complete','/model-failed','/model-rejected','/run-progress','/prepare-discussions','/save-discussion-batch','/image-next','/image-done'].includes(path))throw new RequestError('Another bounded runner owns editorial writes',409);
     }
     if(path==='/collect-items'){
      hold(root);
@@ -176,14 +176,32 @@ export class Newsroom {
      const approvedMonth=Math.min(5_000_000,Number(this.env?.MODEL_MONTHLY_LIMIT_MICRO_USD||5_000_000));
      const approvedDay=Math.min(1_000_000,Number(this.env?.MODEL_DAILY_LIMIT_MICRO_USD||1_000_000));
      if(!Number.isSafeInteger(approvedMonth)||!Number.isSafeInteger(approvedDay)||monthlyLimit>approvedMonth||dailyLimit>approvedDay)throw new RequestError('Model budget exceeds approved total cap',429);
-     const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown}>('model/'+key);
+     const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown;rejectedFailureAt?:string}>('model/'+key);
      if(prior&&!(prior.state==='failed'&&prior.retryable&&(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS))return prior;
      const now=new Date().toISOString(),day=now.slice(0,10),month=now.slice(0,7),daily=await tx.get<number>('budget/day/'+day)??0,monthly=await tx.get<number>('budget/month/'+month)??0;
      if(daily+cost>dailyLimit||monthly+cost>monthlyLimit)throw new RequestError('Model budget limit reached; no API call made',429);
      // Reserve before sending. Only validated provider usage may settle a charge.
      // Unknown calls stay reserved. Confirmed invalid output needs a fresh budgeted attempt.
      await tx.put('budget/day/'+day,daily+cost);await tx.put('budget/month/'+month,monthly+cost);
-     const reservation={state:'reserved',cost,day,month,createdAt:now,attempt:prior?(prior.attempt??1)+1:1,...(prior?{history:[...(prior.history??[]),{settledCost:prior.settledCost,details:prior.details}]}:{})};await tx.put('model/'+key,reservation);return {...reservation,created:true};
+     const reservation={state:'reserved',cost,day,month,createdAt:now,attempt:prior?(prior.attempt??1)+1:1,...(prior?{...(prior.rejectedFailureAt?{rejectedFailureAt:prior.rejectedFailureAt}:{}),history:[...(prior.history??[]),{settledCost:prior.settledCost,details:prior.details}]}:{})};await tx.put('model/'+key,reservation);return {...reservation,created:true};
+    }
+    if(path==='/model-rejected'){
+     hold(root);const key=String(args.key),at=stamp(args.generatedAt),snapshot=await snapshotAt(tx,at,root);
+     const selected=snapshot.selectedStories.find(x=>x.id===args.storyId);
+     if(!selected)throw new RequestError('Article is not selected');
+     const source=await tx.get<Source>(sourceKey(at,selected.id));
+     const expected=source?await digest({policy:EDITORIAL_REQUEST_POLICY,model:this.env?.EDITORIAL_MODEL||'gpt-6-luna',maxOutputTokens:Number(this.env?.MODEL_MAX_OUTPUT_TOKENS||1024),id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description}):null;
+     if(key!==expected)throw new RequestError('Failure reservation does not match pinned source',409);
+     const prior=await tx.get<{state:string;cost:number;day:string;month:string;createdAt:string;attempt?:number;rejectedFailureAt?:string}>('model/'+key);
+     const failure=await tx.get<{kind:string;storyId?:number;recordedAt:string;details?:unknown}>('failure/'+at+'/'+selected.id);
+     const details=parseModelFailureDetails(failure?.details);
+     // Only a parsed, explicit HTTP rejection, after safety checks, is eligible.
+     // No refund: reserve another full charge within the unchanged attempt/cost caps.
+     // A historical failure must never authorize replay of a later uncertain call.
+     if(!prior||prior.state!=='reserved'||failure?.kind!=='validation'||failure.storyId!==selected.id||details?.phase!=='http'||details.httpStatus!==403||
+        !Number.isFinite(Date.parse(failure.recordedAt))||!Number.isFinite(Date.parse(prior.createdAt))||Date.parse(failure.recordedAt)<Date.parse(prior.createdAt)||failure.recordedAt===prior.rejectedFailureAt)return {recovered:false,retryable:false};
+     await tx.put('model/'+key,{...prior,state:'failed',retryable:true,settledCost:prior.cost,details,rejectedFailureAt:failure.recordedAt});
+     return {recovered:true,retryable:(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS};
     }
     if(path==='/model-failed'){
      hold(root);const key=String(args.key),at=stamp(args.generatedAt);

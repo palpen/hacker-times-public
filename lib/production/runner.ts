@@ -57,7 +57,11 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
   // Request-policy identity includes the corrected transport and copy-format policy.
   // Historical reservations remain counted and cannot be silently refunded.
   const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
-  const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  let reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  if(reservation.state==='reserved'&&!reservation.created){
+   const recovery=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {recovered:boolean;retryable:boolean};
+   if(recovery.recovered)reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as typeof reservation;
+  }
   if(reservation.state==='completed'&&reservation.result){
    // Reuse editorial copy, never old selection metadata. A history candidate
    // can omit hnPage/hnRank, so spreading it over the old story leaves stale keys.
@@ -71,6 +75,10 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
    try{result=await generateEditorialCopy(source,selected,{apiKey:env.OPENAI_API_KEY,model,maxOutputTokens});}
    catch(error){
     await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient',details:error instanceof EditorialModelError?error.details:null});
+    if(error instanceof EditorialModelError&&error.kind==='validation'&&error.details?.phase==='http'&&error.details.httpStatus===403){
+     const rejected=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {retryable:boolean};
+     if(rejected.retryable)throw new EditorialRetryError();
+    }
     if(error instanceof EditorialModelError&&error.kind==='validation'&&error.usage&&error.details?.phase==='output'){
      const failed=await call(env,'model-failed',{key,generatedAt:source.generatedAt,storyId:selected.id,draft:error.draft,actualCost:Math.ceil(error.usage.inputTokens*inputPrice+error.usage.outputTokens*outputPrice)}) as {retryable:boolean};
      if(failed.retryable)throw new EditorialRetryError();
