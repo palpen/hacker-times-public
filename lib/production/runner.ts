@@ -1,5 +1,5 @@
 import {RequestError} from '../security';
-import {CollectionError,parseCollectionDetails} from '../collection-error';
+import {CollectionError,parseCollectionDetails,type CollectionDetails} from '../collection-error';
 import {canReuseArchive} from './archived-copy';
 import {recoverFromFeed} from './publisher-feed';
 import type {Candidate} from '../contracts';
@@ -57,7 +57,11 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
   // Request-policy identity includes the corrected transport and copy-format policy.
   // Historical reservations remain counted and cannot be silently refunded.
   const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
-  const reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  let reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  if(reservation.state==='reserved'&&!reservation.created){
+   const recovery=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {recovered:boolean;retryable:boolean};
+   if(recovery.recovered)reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as typeof reservation;
+  }
   if(reservation.state==='completed'&&reservation.result){
    // Reuse editorial copy, never old selection metadata. A history candidate
    // can omit hnPage/hnRank, so spreading it over the old story leaves stale keys.
@@ -71,6 +75,10 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
    try{result=await generateEditorialCopy(source,selected,{apiKey:env.OPENAI_API_KEY,model,maxOutputTokens});}
    catch(error){
     await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient',details:error instanceof EditorialModelError?error.details:null});
+    if(error instanceof EditorialModelError&&error.kind==='validation'&&error.details?.phase==='http'&&error.details.httpStatus===403){
+     const rejected=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {retryable:boolean};
+     if(rejected.retryable)throw new EditorialRetryError();
+    }
     if(error instanceof EditorialModelError&&error.kind==='validation'&&error.usage&&error.details?.phase==='output'){
      const failed=await call(env,'model-failed',{key,generatedAt:source.generatedAt,storyId:selected.id,draft:error.draft,actualCost:Math.ceil(error.usage.inputTokens*inputPrice+error.usage.outputTokens*outputPrice)}) as {retryable:boolean};
      if(failed.retryable)throw new EditorialRetryError();
@@ -114,13 +122,22 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
  enabled(env.AUTO_EDITORIAL_ENABLED,'Automatic editorial workflow');
  enabled(env.MUTATIONS_ENABLED,'Mutations');
  const execution:RunEnv={...env,...(localRequest?{_localRequest:localRequest}:{})};
- const claim=await call(execution,'run-claim') as {claimed:boolean;token:string};
- if(!claim.claimed)return {published:false,busy:true};
+ const claim=await call(execution,'run-claim') as {claimed:boolean;token:string;collectionDeferred?:boolean};
+ if(!claim.claimed)return {published:false,...(claim.collectionDeferred?{checkpoint:'collection_wait'}:{busy:true})};
  const scoped:RunEnv={...execution,_runToken:claim.token},started=Date.now();let continuationDelayMs=30*60_000;
+ let collectionFailure:{httpStatus:number;details:CollectionDetails|null}|undefined;
  try{
   const status=await call(scoped,'status') as {pending:string|null};
   // Collection is its own checkpoint: never combine it with an editorial batch.
-  if(!status.pending){const snapshot=await collect(scoped);continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'collected'};}
+  if(!status.pending){
+   try{const snapshot=await collect(scoped);continuationDelayMs=1_000;return {published:false,generatedAt:snapshot.generatedAt,checkpoint:'collected'};}
+   catch(error){
+    // No pinned batch exists yet, so the ordinary pending-batch alarm cannot
+    // recover this failure. Retain fixed diagnostics and let storage bound retries.
+    collectionFailure={httpStatus:error instanceof RequestError?error.status:500,details:error instanceof CollectionError?parseCollectionDetails(error.details):null};
+    throw error;
+   }
+  }
   const snapshot=await call(scoped,'selection',{generatedAt:status.pending}) as Snapshot;
   const before=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[];cursor:number|null};
   const allIds=snapshot.selectedStories.map(x=>x.id),cursor=before.cursor===null?-1:allIds.indexOf(before.cursor);
@@ -159,5 +176,5 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   const publication=await call(scoped,'publish',{generatedAt:snapshot.generatedAt});
   const persisted=await call(scoped,'edition') as Publication;
   return {publication,verifiedVersion:persisted.version,generatedAt:persisted.edition.generatedAt};
- }finally{await call(scoped,'run-release',{continuationDelayMs});}
+ }finally{await call(scoped,'run-release',{continuationDelayMs,...(collectionFailure?{collectionFailure}:{})});}
 }

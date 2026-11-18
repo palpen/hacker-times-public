@@ -224,6 +224,22 @@ Completion or a safety hold cancels continuations. Alarm retries use the same le
 source evidence, stage checkpoints and no-replay model reservations. Disabling the
 schedule switch prevents alarm execution as well as cron execution.
 
+Metadata collection can fail before any pending snapshot exists. Those failures
+now retain private `runner.collectionFailure` diagnostics: the originating cron
+slot, failure count/time, generic HTTP status, allowlisted collection details,
+planned retry time and collection recovery time. No response bodies, URLs or
+credentials are stored. Recovery here means a new snapshot was saved, not that
+publication finished; public readiness still uses the published source timestamp.
+
+Transport failures and upstream HTTP 408, 429 or 5xx responses get at most two
+additional metadata attempts, one minute apart, in fresh invocations. Durable
+state fences early/duplicate alarm deliveries and exhausted attempts until a new
+cron slot. Successful collection resumes the ordinary validation/publication
+checkpoints. Invalid payloads, content types, request limits, authorization errors,
+safety holds and uncertain model outcomes are not retried by this mechanism.
+These retries address a reproduced pre-snapshot recovery gap; they do not establish
+the cause of the November 17 production gaps without the corresponding run logs.
+
 ## Cloudflare model transport regression (2026-11-12)
 
 The original model adapter set Fetch `redirect: 'error'`. Cloudflare Workers
@@ -353,3 +369,16 @@ second real sentence, plus no-cost draft reuse through the runner.
 ## Reader parity update
 
 See [READER_PARITY.md](READER_PARITY.md) for the complete comparison and release boundary. After all required articles are staged, the automatic runner now collects the existing Sites v4 discussion highlights in six resumable four-thread checkpoints. Each checkpoint performs at most 24 upstream reads outside storage transactions. The final immutable snapshot is validated with the edition before atomic publication; readers and archives never recollect it. Partial/unavailable comment results remain explicit and do not alter story selection. Publisher metadata is preserved, and generated newspaper decks reuse the authored compact sentence without an extra model call. Automated image review and a protected publishing dashboard remain deferred.
+
+## Definitive editorial HTTP rejection recovery
+
+A parsed HTTP 403 provider rejection (after refusal/safety checks) may recover a
+matching reserved text request using the same provider, model, source and budget.
+The private `model-rejected` transition retains the entire original reservation,
+then requires a separately budgeted retry within the existing three-attempt cap.
+It also handles historical reserved requests with a retained, matching rejection.
+Pinned-source identity, current snapshot, runner fencing, failure timestamp and
+an already-consumed rejection marker prevent an old failure from authorizing a
+later uncertain request. Timeout, transport, payload, usage and safety failures
+are not eligible. Exhausted retries stay blocked; no fabricated or relabeled
+source-unavailable copy is published and no budget limit is increased.
