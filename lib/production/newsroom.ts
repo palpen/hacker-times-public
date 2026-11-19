@@ -7,7 +7,7 @@ import {fetchOfficialItems} from '../reporting';
 import {CollectionError,parseCollectionDetails,type CollectionDetails} from '../collection-error';
 import {pinSnapshot} from './selection';
 import {digest,readBlob,writeBlob,equivalent,type Store} from './storage';
-import {parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
+import {isProviderOverload,parseModelFailureDetails,EDITORIAL_REQUEST_POLICY,MAX_EDITORIAL_ATTEMPTS} from './editorial-model';
 import {ArchiveCopies} from './archived-copy';
 import {publisherFeedUrl} from './publisher-feed';
 import {runEdition} from './runner';
@@ -129,7 +129,7 @@ export class Newsroom {
        await tx.put(collectionFailureKey,{scheduleSlot,attempts,failedAt:new Date().toISOString(),httpStatus,details,retryAt:retryAt===null?null:new Date(retryAt).toISOString(),recoveredAt:null} satisfies CollectionFailure);
       }
       if(this.automatic()){
-       if(pending&&!root.safetyStop)await tx.setAlarm(Date.now()+(args.continuationDelayMs===1_000?1_000:30*60_000));
+       if(pending&&!root.safetyStop)await tx.setAlarm(Date.now()+(Number.isInteger(args.continuationDelayMs)&&Number(args.continuationDelayMs)>=1_000&&Number(args.continuationDelayMs)<=60_000?Number(args.continuationDelayMs):30*60_000));
        else if(retryAt!==null)await tx.setAlarm(retryAt);
        else await tx.deleteAlarm();
       }
@@ -176,8 +176,8 @@ export class Newsroom {
      const approvedMonth=Math.min(5_000_000,Number(this.env?.MODEL_MONTHLY_LIMIT_MICRO_USD||5_000_000));
      const approvedDay=Math.min(1_000_000,Number(this.env?.MODEL_DAILY_LIMIT_MICRO_USD||1_000_000));
      if(!Number.isSafeInteger(approvedMonth)||!Number.isSafeInteger(approvedDay)||monthlyLimit>approvedMonth||dailyLimit>approvedDay)throw new RequestError('Model budget exceeds approved total cap',429);
-     const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown;rejectedFailureAt?:string}>('model/'+key);
-     if(prior&&!(prior.state==='failed'&&prior.retryable&&(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS))return prior;
+     const prior=await tx.get<{state:string;attempt?:number;retryable?:boolean;history?:unknown[];settledCost?:number;details?:unknown;rejectedFailureAt?:string;retryAt?:number}>('model/'+key);
+     if(prior&&!(prior.state==='failed'&&prior.retryable&&(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS&&(!prior.retryAt||Date.now()>=prior.retryAt)))return prior;
      const now=new Date().toISOString(),day=now.slice(0,10),month=now.slice(0,7),daily=await tx.get<number>('budget/day/'+day)??0,monthly=await tx.get<number>('budget/month/'+month)??0;
      if(daily+cost>dailyLimit||monthly+cost>monthlyLimit)throw new RequestError('Model budget limit reached; no API call made',429);
      // Reserve before sending. Only validated provider usage may settle a charge.
@@ -198,9 +198,10 @@ export class Newsroom {
      // Only a parsed, explicit HTTP rejection, after safety checks, is eligible.
      // No refund: reserve another full charge within the unchanged attempt/cost caps.
      // A historical failure must never authorize replay of a later uncertain call.
-     if(!prior||prior.state!=='reserved'||failure?.kind!=='validation'||failure.storyId!==selected.id||details?.phase!=='http'||details.httpStatus!==403||
+     const overload=isProviderOverload(failure?.kind,details);
+     if(!prior||prior.state!=='reserved'||!failure||(!(failure.kind==='validation'&&details?.phase==='http'&&details.httpStatus===403)&&!overload)||failure.storyId!==selected.id||
         !Number.isFinite(Date.parse(failure.recordedAt))||!Number.isFinite(Date.parse(prior.createdAt))||Date.parse(failure.recordedAt)<Date.parse(prior.createdAt)||failure.recordedAt===prior.rejectedFailureAt)return {recovered:false,retryable:false};
-     await tx.put('model/'+key,{...prior,state:'failed',retryable:true,settledCost:prior.cost,details,rejectedFailureAt:failure.recordedAt});
+     await tx.put('model/'+key,{...prior,state:'failed',retryable:(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS,settledCost:prior.cost,details,rejectedFailureAt:failure.recordedAt,...(overload?{retryAt:Date.parse(failure.recordedAt)+30_000*2**((prior.attempt??1)-1)}:{})});
      return {recovered:true,retryable:(prior.attempt??1)<MAX_EDITORIAL_ATTEMPTS};
     }
     if(path==='/model-failed'){
