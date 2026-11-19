@@ -10,10 +10,10 @@ export type Placement = 'lead'|'top'|'discussion'|'section'|'section-only';
 export type Story = {
  id:number;title:string;headline:string;summary:string;summarySource?:'article'|'page_description'|'publisher_feed'|'archived_summary'|'hn_post'|'unavailable';shortSummary?:string;url:string;publisher:string;
  score:number;comments:number;time:number;category:string;
- hnRank?:number;hnPage?:number;editorialScore?:number;placement?:Placement;topics?:Category[];discoverySource?:'current'|'history';
+ gamesTopicVersion?:1;gamesOnly?:true;hnRank?:number;hnPage?:number;editorialScore?:number;placement?:Placement;topics?:Category[];discoverySource?:'current'|'history';
  image?:string|null;imageAlt?:string;imageCredit?:string;articleStatus?:string;
 };
-export type Candidate = {id:number;title:string;url:string;score:number;comments:number;time:number;hnRank?:number;hnPage?:number;category:Category;editorialScore:number;placement?:Placement;topics?:Category[];discoverySource?:'current'|'history'};
+export type Candidate = {gamesTopicVersion?:1;gamesOnly?:true;id:number;title:string;url:string;score:number;comments:number;time:number;hnRank?:number;hnPage?:number;category:Category;editorialScore:number;placement?:Placement;topics?:Category[];discoverySource?:'current'|'history'};
 export type Edition = {discussionHighlights?:DiscussionSnapshot;schemaVersion?:1;freshnessPolicyVersion?:1;selectionVersion?:1|2|3|4|5|6;summaryPolicyVersion?:1;leadPolicyVersion?:string;layoutVersion?:number;policyVersion?:string;policyConfig?:Record<string,unknown>;generatedAt:string;windowStart?:string;windowEnd?:string;discovery?:Record<string,unknown>;frontPageIds?:number[];frontPageUrl?:string;sourcePages?:{url:string;ids:number[]}[];sourceMode?:string;algorithmVersion?:number;stories:Story[];candidateCount:number;fetchedCount?:number;ranking:string;editionDate?:string;persisted?:boolean};
 // Version the persisted selection separately from ranking code and reader layout.
 export type SourceSnapshot = {schemaVersion?:1;summaryPolicyVersion?:1;freshnessPolicyVersion?:1;selectionVersion?:1|2|3|4|5|6;leadPolicyVersion?:string;leadPlan?:LeadPlan;layoutVersion?:1|2|3;policyVersion?:string;policyConfig?:Record<string,unknown>;ranking?:string;basePublicationVersion?:string;windowStart?:string;windowEnd?:string;sourceMode?:string;discovery?:Record<string,unknown>;generatedAt:string;frontPageIds:number[];sourcePages:{url:string;ids:number[]}[];algorithmVersion:number;candidateCount:number;fetchedCount:number;rankedStories:Candidate[];selectedStories:Candidate[]};

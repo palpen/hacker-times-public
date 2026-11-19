@@ -367,7 +367,7 @@ export class Newsroom {
     }
     if(path==='/stage'){
      const story=args.story as Story,selected=s.selectedStories.find(x=>x.id===story?.id);if(!selected)throw new RequestError('Article is not selected');
-     if(['title','url','score','comments','time','category','placement','topics','editorialScore','hnPage','hnRank','discoverySource'].some(k=>JSON.stringify(story[k as keyof Story])!==JSON.stringify(selected[k as keyof typeof selected])))throw new RequestError('Authoritative selection fields changed');
+     if(['title','url','score','comments','time','category','placement','topics','gamesTopicVersion','gamesOnly','editorialScore','hnPage','hnRank','discoverySource'].some(k=>JSON.stringify(story[k as keyof Story])!==JSON.stringify(selected[k as keyof typeof selected])))throw new RequestError('Authoritative selection fields changed');
      if(story.image)throw new RequestError('Images require a separate visual verification workflow; omit for now');
      const source=await tx.get<Source>(sourceKey(at,story.id));
      if(!source||source.fingerprint!==args.sourceFingerprint)throw new RequestError('Pinned source evidence required');

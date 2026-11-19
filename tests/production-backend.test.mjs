@@ -487,7 +487,7 @@ test('production collection hydrates the complete pool in private batches below 
  };
  try{
   const snapshot=await api.collectMetadata(env);
-  assert.deepEqual(batches,[32,32,26]);assert.equal(external,104);
+  assert.deepEqual(batches,[32,32,26]);assert.equal(external,107); // topstories + 16 index queries + 90 official items
   assert.equal(snapshot.rankedStories.length,90);assert.equal(snapshot.discovery.currentSource,'hn-topstories-api');
   assert.equal((await s.call('status')).pending,snapshot.generatedAt);
   const before=external;

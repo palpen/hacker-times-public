@@ -1,3 +1,4 @@
+import {inStorySection} from './games-topic';
 import {summaryText} from './summary';
 import {renderDiscussionHighlights} from './discussion-markup';
 import type {Edition} from './contracts';
@@ -16,8 +17,9 @@ export function renderEdition(edition:Edition,version:string){
  const json=JSON.stringify({generatedAt:edition.generatedAt,layoutVersion:edition.layoutVersion,freshnessPolicyVersion:edition.freshnessPolicyVersion,version,stories,submissionTimes:edition.discussionHighlights?.sources?.map(({id,time})=>({id,time})),commentsAsset:editionAssets.comments,commentsCssAsset:editionAssets.commentsCss}).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
  const fresh=edition.freshnessPolicyVersion===1,at=Date.parse(edition.generatedAt)/1000;
  const fallbackSections=fresh?`<noscript><section class="section-fallback" aria-label="Section collections"><h2 class="section-heading">Section collections</h2>${categories.map(name=>{
-  const collection=stories.filter(s=>(s.category===name||s.topics?.includes(name))&&at-s.time>0&&at-s.time<=30*86400);
+  let collection=stories.filter(s=>inStorySection(s,name)&&at-s.time>0&&at-s.time<=30*86400);
   collection.sort((a,b)=>(b.editorialScore??0)-(a.editorialScore??0)||b.time-a.time||a.id-b.id);
+  if(name==='Games'&&stories.some(s=>s.gamesTopicVersion===1))collection=collection.slice(0,16);
   return `<details><summary>${name} (${collection.length})</summary><div class="story-grid filtered-grid">${collection.map(s=>articleMarkup(s)).join('')||'<p class="empty">No selected stories.</p>'}</div></details>`;
  }).join('')}</section></noscript>`:'';
  const leadOrigin=lead?.image?new URL(lead.image).origin:'';
