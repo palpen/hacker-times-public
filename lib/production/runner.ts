@@ -5,11 +5,11 @@ import {recoverFromFeed} from './publisher-feed';
 import type {Candidate} from '../contracts';
 import type {OfficialItem} from '../reporting';
 import {digest} from './storage';
-import {generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
+import {isProviderOverload,generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_EDITORIAL_ATTEMPTS,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
 import {processImage,type ImagePlan} from './image-runner';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
-class EditorialRetryError extends RequestError {constructor(){super('Invalid editorial output; a bounded accounted retry is available',503);}}
+class EditorialRetryError extends RequestError {constructor(readonly delayMs=1_000){super('Editorial generation has a bounded accounted retry available',503);}}
 type LocalRequest=(request:Request)=>Promise<Response>;
 type RunEnv=ProductionEnv & {_runToken?:string;_localRequest?:LocalRequest};
 export async function call(env:RunEnv,path:string,args:Record<string,unknown>={}){
@@ -57,7 +57,7 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
   // Request-policy identity includes the corrected transport and copy-format policy.
   // Historical reservations remain counted and cannot be silently refunded.
   const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
-  let reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  let reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;retryAt?:number;attempt?:number;retryable?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
   if(reservation.state==='reserved'&&!reservation.created){
    const recovery=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {recovered:boolean;retryable:boolean};
    if(recovery.recovered)reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as typeof reservation;
@@ -71,13 +71,14 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
    try{result=reviewEditorialDraft(source,selected,reservation.draft);}
    catch{throw new RequestError('Retained editorial draft still fails validation; no API call made',409);}
   }else{
+   if(!reservation.created&&reservation.state==='failed'&&reservation.retryable&&reservation.retryAt&&reservation.retryAt>Date.now()&&(reservation.attempt??1)<MAX_EDITORIAL_ATTEMPTS)throw new EditorialRetryError(Math.min(60_000,Math.max(1_000,reservation.retryAt-Date.now())));
    if(!reservation.created)throw new RequestError(reservation.state==='failed'?'Editorial output retry limit reached':'Prior model call has an uncertain outcome; review usage before any retry',409);
    try{result=await generateEditorialCopy(source,selected,{apiKey:env.OPENAI_API_KEY,model,maxOutputTokens});}
    catch(error){
     await call(env,'failure',{generatedAt:source.generatedAt,storyId:selected.id,kind:error instanceof EditorialModelError?error.kind:'transient',details:error instanceof EditorialModelError?error.details:null});
-    if(error instanceof EditorialModelError&&error.kind==='validation'&&error.details?.phase==='http'&&error.details.httpStatus===403){
+    if(error instanceof EditorialModelError&&((error.kind==='validation'&&error.details?.phase==='http'&&error.details.httpStatus===403)||isProviderOverload(error.kind,error.details))){
      const rejected=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {retryable:boolean};
-     if(rejected.retryable)throw new EditorialRetryError();
+     if(rejected.retryable)throw new EditorialRetryError(isProviderOverload(error.kind,error.details)?30_000*2**((reservation.attempt??1)-1):1_000);
     }
     if(error instanceof EditorialModelError&&error.kind==='validation'&&error.usage&&error.details?.phase==='output'){
      const failed=await call(env,'model-failed',{key,generatedAt:source.generatedAt,storyId:selected.id,draft:error.draft,actualCost:Math.ceil(error.usage.inputTokens*inputPrice+error.usage.outputTokens*outputPrice)}) as {retryable:boolean};
@@ -142,7 +143,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
   const before=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[];cursor:number|null};
   const allIds=snapshot.selectedStories.map(x=>x.id),cursor=before.cursor===null?-1:allIds.indexOf(before.cursor);
   const ordered=[...allIds.slice(cursor+1),...allIds.slice(0,cursor+1)].filter(id=>before.missingIds.includes(id));
-  const blockedIds:number[]=[];let attempted=0,retryPending=false;
+  const blockedIds:number[]=[];let attempted=0,retryDelay=0;
   for(const id of ordered){
    if(attempted>=3||Date.now()-started>=90_000)break;
    attempted++;
@@ -151,7 +152,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
    catch(error){
     const check=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {safetyStop:unknown};
     if(check.safetyStop)throw error;
-    if(error instanceof EditorialRetryError)retryPending=true;
+    if(error instanceof EditorialRetryError)retryDelay=Math.max(retryDelay,error.delayMs);
     // Keep every required article. Independent missing articles may progress,
     // but unknown reservations are never retried and prevent complete publication.
     if(error instanceof RequestError&&(error.status===409||error.status===502||error.status===503)){blockedIds.push(id);continue;}
@@ -159,7 +160,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
    }
   }
   const after=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[]};
-  if(after.missingIds.length<before.missingIds.length||retryPending)continuationDelayMs=1_000;
+  if(after.missingIds.length<before.missingIds.length||retryDelay)continuationDelayMs=retryDelay||1_000;
   if(after.missingIds.length)return {published:false,generatedAt:snapshot.generatedAt,attempted,blockedIds,missingIds:after.missingIds,checkpoint:'staged'};
   // Start discussions in a fresh invocation after the final article. Each
   // checkpoint collects at most four threads, independent of reader visits.

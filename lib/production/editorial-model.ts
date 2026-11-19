@@ -27,6 +27,11 @@ export function parseModelFailureDetails(value: unknown): ModelFailureDetails | 
     ...(typeof v.code==='string' && diagnosticCodes.has(v.code) ? {code:v.code}:{})};
 }
 export type EditorialModelFailure = 'safety_stop' | 'transient' | 'validation';
+/** Only an explicit, parsed provider overload is safe for bounded recovery. */
+export function isProviderOverload(kind: unknown, details: ModelFailureDetails | null): boolean {
+  return kind === 'transient' && details?.phase === 'http' && details.httpStatus === 503 && details.code === 'server_is_overloaded';
+}
+
 
 /**
  * No automatic retries. After a request, unknown accounting retains the caller's

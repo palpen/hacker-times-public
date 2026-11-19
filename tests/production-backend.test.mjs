@@ -877,3 +877,62 @@ test('runner recovers stored HTTP403 once without refund and rejects a later saf
   }finally{globalThis.fetch=old;}
  }
 });
+
+test('parsed HTTP503 overload recovery retains charges, binds pinned source, rejects stale failures and caps attempts',async()=>{
+ const s=await setup(),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});const row=f.selectedStories[0];await author(s,f,row);
+ const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
+ const key=await api.digest({policy:'editorial-v3-normalized-copy',model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+ const args={key,cost:100,dailyLimit:400,monthlyLimit:500},recover={key,generatedAt:f.generatedAt,storyId:row.id};
+ await s.call('model-reserve',args);
+ for(const details of [{phase:'timeout',httpStatus:503,code:'server_is_overloaded'},{phase:'transport'},{phase:'payload',httpStatus:503,code:'server_is_overloaded'},{phase:'http',httpStatus:500,code:'server_is_overloaded'},{phase:'http',httpStatus:503,code:'server_error'},{phase:'http',httpStatus:503},{phase:'output'}]){
+  await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'transient',details});
+  assert.equal((await s.call('model-rejected',recover)).recovered,false);
+ }
+ for(let attempt=1;attempt<=3;attempt++){
+  await new Promise(resolve=>setTimeout(resolve,2));
+  await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'transient',details:{phase:'http',httpStatus:503,code:'server_is_overloaded'}});
+  await assert.rejects(()=>s.call('model-rejected',{...recover,key:'a'.repeat(64)}),/pinned source/);
+  const result=await s.call('model-rejected',recover);assert.equal(result.recovered,true);assert.equal(result.retryable,attempt<3);
+  assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,100*attempt,'no rejected-request charge refunded');
+  const held=await s.call('model-reserve',args);assert.equal(held.created,undefined,'durable backoff blocks immediate/manual/cron retry');
+  assert.equal(held.retryAt-Date.parse(held.rejectedFailureAt),30_000*2**(attempt-1));
+  await s.storage.put('model/'+key,{...held,retryAt:Date.now()-1});
+  const next=await s.call('model-reserve',args);
+  if(attempt<3){
+   assert.equal(next.attempt,attempt+1);assert.equal(next.created,true);
+   // Even equal timestamps cannot reuse an already-consumed rejection.
+   const prior=await s.storage.get('model/'+key);await s.storage.put('model/'+key,{...prior,createdAt:prior.rejectedFailureAt});
+   assert.equal((await s.call('model-rejected',recover)).recovered,false);
+   await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'transient',details:{phase:'timeout'}});
+   assert.equal((await s.call('model-rejected',recover)).recovered,false);
+  }else{assert.equal(next.created,undefined);assert.equal(next.state,'failed');}
+ }
+ assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,300);
+});
+
+
+test('runner recovers stored HTTP503 overload once without refund and rejects a later safety stop',async()=>{
+ for(const safety of [false,true]){
+  const env={LIVE_FETCH_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.5',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'};
+  const s=await setup(env),f=snapshot(await s.call('root'));await s.call('snapshot',{snapshot:f});const row=f.selectedStories[0];await author(s,f,row);
+  const source=await s.call('get-source',{generatedAt:f.generatedAt,id:row.id});
+  const key=await api.digest({policy:api.EDITORIAL_REQUEST_POLICY,model:'gpt-6-luna',maxOutputTokens:1024,id:row.id,title:row.title,url:row.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
+  await s.call('model-reserve',{key,cost:8704,dailyLimit:1000000,monthlyLimit:5000000});
+  await s.call('failure',{generatedAt:f.generatedAt,storyId:row.id,kind:'transient',details:{phase:'http',httpStatus:503,code:'server_is_overloaded'}});
+  const oldAt=new Date(Date.now()-120_000).toISOString();
+  const prior=await s.storage.get('model/'+key);await s.storage.put('model/'+key,{...prior,createdAt:oldAt});
+  const failureKey='failure/'+f.generatedAt+'/'+row.id;const failure=await s.storage.get(failureKey);await s.storage.put(failureKey,{...failure,recordedAt:oldAt});
+  const runEnv={...env,NEWSROOM:{idFromName:x=>x,get:()=>({fetch:req=>s.newsroom.fetch(req)})}};
+  const old=globalThis.fetch;let calls=0;
+  try{
+   globalThis.fetch=async(url)=>{
+    assert.equal(url,'https://api.openai.com/v1/responses');calls++;
+    if(safety)return Response.json({error:{code:'content_policy_violation'}},{status:403});
+    return Response.json({status:'completed',usage:{input_tokens:50,output_tokens:30,total_tokens:80},output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify({headline:row.title,summary:source.excerpt,shortSummary:source.excerpt,summarySource:'article'})}]}]});
+   };
+   if(safety){await assert.rejects(()=>api.summarize(runEnv,{generatedAt:f.generatedAt,id:row.id}),/safety stop/);assert.ok((await s.call('status')).safetyStop);await assert.rejects(()=>s.call('model-rejected',{key,generatedAt:f.generatedAt,storyId:row.id}),/safety stop/i);}
+   else{await api.summarize(runEnv,{generatedAt:f.generatedAt,id:row.id});assert.equal((await s.call('status',{generatedAt:f.generatedAt})).staged,1);assert.equal((await s.call('status')).modelBudget.dailyReservedMicroUsd,8704+22);}
+   assert.equal(calls,1);
+  }finally{globalThis.fetch=old;}
+ }
+});
