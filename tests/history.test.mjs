@@ -20,15 +20,15 @@ try{
  assert.equal(window.endSeconds,Math.ceil(at/1000));
  for(const bad of [NaN,Infinity,0,at+.5])assert.throws(()=>monthWindow(bad));
  const queries=historyQueries(at);
- assert.equal(queries.length,13);
- assert.deepEqual(queries.map(q=>q.query),['','','AI','LLM','game','chess','science','physics','biology','history','music','business','economy']);
+ assert.equal(queries.length,16);
+ assert.deepEqual(queries.map(q=>q.query),['','','AI','LLM','game','chess','science','physics','biology','history','music','business','economy','game','puzzle','playable']);
  for(const [i,q] of queries.entries()){
   const url=new URL(q.url),p=url.searchParams;
-  assert.equal(url.origin,'https://hn.algolia.com');assert.equal(url.pathname,'/api/v1/'+(i===1?'search_by_date':'search'));
-  assert.equal(p.get('tags'),'(story,poll)');assert.equal(p.get('numericFilters'),`created_at_i>=${window.startSeconds},created_at_i<${window.endSeconds}`);
+  assert.equal(url.origin,'https://hn.algolia.com');assert.equal(url.pathname,'/api/v1/'+(i===1||i>=13?'search_by_date':'search'));
+  assert.equal(p.get('tags'),'(story,poll)');assert.equal(p.get('numericFilters'),`created_at_i>=${i<13?window.startSeconds:Math.ceil((at-4*86400000)/1000)},created_at_i<${window.endSeconds}`);
   assert.equal(p.get('page'),'0');assert.equal(p.get('hitsPerPage'),'100');assert.equal(p.get('analytics'),'false');
   assert.deepEqual(JSON.parse(p.get('attributesToRetrieve')),['objectID','title','url','points','num_comments','created_at_i']);
-  assert.equal(p.get('attributesToHighlight'),'[]');assert.equal(p.get('attributesToSnippet'),'[]');
+  assert.equal(p.get('attributesToHighlight'),'[]');assert.equal(p.get('attributesToSnippet'),i<13?'[]':'["story_text:40"]');
  }
  assert.deepEqual(parseHistoryResponse(envelope([]),window),[]);
  assert.equal(parseHistoryResponse(envelope([raw(1,{url:null})]),window)[0].url,undefined);
@@ -47,7 +47,7 @@ try{
  for(const [category,title] of topics.entries())assert.ok(shortlist.filter(s=>s.title===title).length>=20,`topic ${category}`);
  assert.deepEqual(shortlistHistorical([...pool,...newest],[],at),shortlist);
  assert.ok(!shortlistHistorical(pool,[1,1001],at).some(s=>[1,1001].includes(s.id)));
- assert.throws(()=>shortlistHistorical(Array.from({length:1301},(_,i)=>indexed(i+1,'Hardware')),[],at));
+ assert.throws(()=>shortlistHistorical(Array.from({length:1601},(_,i)=>indexed(i+1,'Hardware')),[],at));
  const older=topics.flatMap((title,c)=>Array.from({length:8},(_,n)=>indexed(20000+c*100+n,title,{score:50,comments:10,time:window.endSeconds-(8+n)*86400})));
  const reserved=shortlistHistorical([...pool,...newest,...older],[],at);
  assert.ok(reserved.length<=164);assert.equal(new Set(reserved.map(s=>s.id)).size,reserved.length);
@@ -55,15 +55,15 @@ try{
  for(const row of newest)assert.ok(reserved.some(s=>s.id===row.id));
  let calls=[];
  globalThis.fetch=async (input,options)=>{calls.push(String(input));assert.equal(options.redirect,'manual');assert.ok(options.signal instanceof AbortSignal);return Response.json(envelope([raw(1),raw(2,{url:null})]));};
- const discovered=await discoverHistory(at,[1]);assert.equal(calls.length,13);assert.deepEqual(discovered.shortlisted.map(s=>s.id),[2]);
+ const discovered=await discoverHistory(at,[1]);assert.equal(calls.length,16);assert.deepEqual(discovered.shortlisted.map(s=>s.id),[2]);
  assert.equal(discovered.discovery.coverage,'sampled');assert.equal(discovered.discovery.discoveredCount,2);assert.equal(discovered.discovery.shortlistedCount,1);assert.equal(discovered.discovery.limits.maxOfficialItems,254);
- assert.deepEqual(discovered.discovery.queries.map(q=>q.hitCount),Array(13).fill(2));
+ assert.deepEqual(discovered.discovery.queries.map(q=>q.hitCount),Array(16).fill(2));
  // Simulate slow responses: request deadlines should not run while waiting
- // behind more fetches than the Worker can open. Preserve all 13 query results.
+ // behind more fetches than the Worker can open. Preserve all 16 query results.
  let active=0,peak=0,total=0;
  globalThis.fetch=async()=>{active++;total++;peak=Math.max(peak,active);await new Promise(resolve=>setTimeout(resolve,3));active--;return Response.json(envelope([raw(1)]));};
  const bounded=await discoverHistory(at,[]);
- assert.equal(total,13);assert.equal(peak,4);assert.equal(active,0);
+ assert.equal(total,16);assert.equal(peak,4);assert.equal(active,0);
  assert.deepEqual(bounded.discovery.queries.map(q=>q.kind),queries.map(q=>q.kind));
  globalThis.fetch=async()=>Response.json(envelope([raw(1)]),{status:503});await assert.rejects(()=>discoverHistory(at,[]),/Historical HN discovery/);
  globalThis.fetch=async()=>Response.json(envelope([raw(1)]),{status:206});await assert.rejects(()=>discoverHistory(at,[]),/Historical HN discovery/);
@@ -72,5 +72,25 @@ try{
  globalThis.fetch=async()=>new Response(' '.repeat(historyLimits.maxResponseBytes+1),{headers:{'content-type':'application/json'}});await assert.rejects(()=>discoverHistory(at,[]),/response limit/);
  globalThis.fetch=async()=>new Response('{}',{headers:{'content-type':'application/json','content-length':String(historyLimits.maxResponseBytes+1)}});await assert.rejects(()=>discoverHistory(at,[]),/response limit/);
  globalThis.fetch=async input=>new URL(String(input)).searchParams.get('query')==='chess'?Response.json(envelope([]),{status:503}):Response.json(envelope([raw(1)]));await assert.rejects(()=>discoverHistory(at,[]),/Historical HN discovery/);
- console.log('PASS: pinned exact 30-day bounds; 13 fixed projected queries; strict partial/malformed/body-size rejection; deduplication, topical and chronological coverage; shortlist and fetch bounds; required discovery fails closed.');
+ // Supplemental index sees a recent Show HN play project missed by base
+ // searches, plus a mismatch and an optional feed outage. Nothing can turn
+ // index text or engagement into published facts.
+ globalThis.fetch=async input=>{
+  const url=new URL(String(input)),query=url.searchParams.get('query');
+  if(url.pathname.endsWith('search_by_date')&&query==='game')return Response.json(envelope([
+   raw(5000,{title:'Show HN: Type Fighter 2',url:'https://typefighter2.com/',_snippetResult:{story_text:{value:'Type Fighter II is an arcade inspired game for people learning to touch type.'}}}),
+   raw(5001,{title:'An explanation of game theory in economics'}),
+   raw(5002,{title:'A new chess game',points:19,num_comments:4}),
+  ]));
+  if(url.pathname.endsWith('search_by_date')&&query==='puzzle')return Response.json(envelope([raw(5000,{title:'Show HN: Type Fighter 2',url:'https://typefighter2.com/'})]));
+  if(url.pathname.endsWith('search_by_date')&&query==='playable')return Response.json({}, {status:503});
+  return Response.json(envelope([raw(1)]));
+ };
+ const optional=await discoverHistory(at,[]);
+ assert.deepEqual(optional.gamesOnlyIds,[5000]);
+ assert.equal(optional.shortlisted.filter(s=>s.id===5000).length,1);
+ assert.ok(!optional.shortlisted.some(s=>s.id===5001||s.id===5002));
+ assert.equal(optional.discovery.queries.at(-1).available,false);
+ assert.equal(optional.discovery.queries.at(-1).hitCount,0);
+ console.log('PASS: pinned exact 30-day bounds; 16 fixed projected queries; strict partial/malformed/body-size rejection; deduplication, topical and chronological coverage; shortlist and fetch bounds; required discovery fails closed.');
 }finally{globalThis.fetch=oldFetch;fs.rmSync(temp,{recursive:true,force:true});}

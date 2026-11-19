@@ -34,7 +34,8 @@ globalThis.fetch=async (input,options)=>{
  if(/^https:\/\/news.ycombinator.com\/(\?p=[23])?$/.test(url))return new Response(html(Number(new URL(url).searchParams.get('p')||1)),{headers:{'content-type':'text/html'}});
  if(url.startsWith('https://hn.algolia.com/')){
   if(mode==='discovery-fail'&&new URL(url).searchParams.get('query')==='chess')return Response.json({},{status:503});
-  assert.equal(new URL(url).searchParams.get('numericFilters'),`created_at_i>=${cutoff},created_at_i<${Math.ceil(at/1000)}`);
+  const u=new URL(url),recent=u.pathname.endsWith('search_by_date')&&!!u.searchParams.get('query');
+  assert.equal(u.searchParams.get('numericFilters'),`created_at_i>=${recent?Math.ceil((at-4*86400000)/1000):cutoff},created_at_i<${Math.ceil(at/1000)}`);
   return Response.json({hits:history.map(indexed),hitsPerPage:100,nbHits:100,nbPages:1,page:0});
  }
  if(url.includes('/item/')){
@@ -64,7 +65,7 @@ try{
  const month=await candidates(1,'month');
  assert.equal(month.schemaVersion,1);assert.equal(month.selectionVersion,6);assert.equal(month.layoutVersion,3);assert.equal(month.algorithmVersion,3);assert.equal(month.policyVersion,'hn-month-unified-sections-v6');assert.equal(month.sourceMode,'hn-month-sample');
  assert.equal(month.generatedAt,new Date(at).toISOString());assert.equal(month.windowEnd,month.generatedAt);assert.equal(month.windowStart,new Date(at-30*86400000).toISOString());
- assert.equal(month.discovery.coverage,'sampled');assert.equal(month.discovery.requestCount,13);assert.equal(month.discovery.discoveredCount,100);assert.ok(month.fetchedCount<=254);assert.equal(month.fetchedCount,90+month.discovery.shortlistedCount);assert.equal(month.discovery.historyFetchedCount,month.discovery.shortlistedCount);
+ assert.equal(month.discovery.coverage,'sampled');assert.equal(month.discovery.requestCount,16);assert.equal(month.discovery.discoveredCount,100);assert.ok(month.fetchedCount<=254);assert.equal(month.fetchedCount,90+month.discovery.shortlistedCount);assert.equal(month.discovery.historyFetchedCount,month.discovery.shortlistedCount);
  assert.ok(month.stories.length>42&&month.stories.length<=126);assert.equal(new Set(month.stories.map(s=>s.id)).size,month.stories.length);assert.equal(month.stories[0].id,1);assert.equal(month.stories[0].time,cutoff-1);assert.ok(!month.stories.some(s=>s.id===2));assert.ok(month.stories.slice(1).every(s=>s.time*1000>=at-30*86400000&&s.time*1000<at));
  assert.ok(['discussion','section'].includes(month.stories.find(s=>s.id===60).placement));assert.deepEqual(month.stories.filter(s=>s.placement==='top').map(s=>s.id),[3,4,5,6,7,8,9]);assert.ok(month.stories[0].isSelfPost);assert.equal(month.stories[0].articleStatus,'hn_self_post');
  assert.ok(month.rankedStories.filter(s=>s.id>90).every(s=>!('hnPage' in s)&&!('hnRank' in s)&&s.discoverySource==='history'));

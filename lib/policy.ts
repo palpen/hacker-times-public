@@ -1,3 +1,4 @@
+import {inStorySection} from './games-topic';
 import {normalizeArticleUrl} from './lead-retirement';
 import {categories,legacyCategories,type Category,type Placement,type Candidate} from './contracts';
 export const policyVersion='hn-balanced-v2';
@@ -183,14 +184,15 @@ export const unifiedSectionPolicyConfig={...freshSectionPolicyConfig,recencyHalf
 export const unifiedSectionRanking='Lead: selected separately by the balanced current-page lead policy. Other top stories remain current-first-page only and younger than seven days. Today desk previews and discussion placements are also younger than seven days. Logarithmic engagement (60 points / 25 comments; swapped for discussion) is multiplied by 2^(-ageDays), a 24-hour half-life with no additive freshness bonus. Independent sections contain up to 16 qualified stories in one ranked list across the sampled 30-day window, with no reserved older slots or seven-day section cutoff. Older stories can stay when their own meaningful engagement overcomes the stronger age penalty. Qualification requires 20 official HN points, 5 comments, or actual sampled current-page presence. Show fewer stories rather than weak filler. Fresh reposts compete using only their own submission age and counts; one normalized linked URL per edition. Permanent lead retirement is unchanged. Discovery is bounded, not exhaustive.';
 export function selectUnifiedMonthlyStories(pool:Candidate[],frontIds:number[],incumbentId:number|undefined,at:number,selectedLeadId?:number,currentPageIds:readonly number[]=frontIds):Candidate[]{
  if(!Number.isFinite(at)||new Set(pool.map(s=>s.id)).size!==pool.length)throw Error('Invalid monthly candidate pool');
- const front=new Set(frontIds),first=pool.filter(s=>front.has(s.id)).sort((a,b)=>frontIds.indexOf(a.id)-frontIds.indexOf(b.id));
+ const front=new Set(frontIds),first=pool.filter(s=>!s.gamesOnly&&front.has(s.id)).sort((a,b)=>frontIds.indexOf(a.id)-frontIds.indexOf(b.id));
  const lead=selectedLeadId!==undefined?first.find(s=>s.id===selectedLeadId):rankByPoints(first,incumbentId)[0];
  if(!lead)throw Error('No eligible front-page lead; keep the previous edition.');
  const eligible=pool.filter(s=>s.id===lead.id||(s.time*1000>=at-30*86_400_000&&s.time*1000<at));
- const maxPoints=Math.max(1,...eligible.map(s=>s.score)),maxComments=Math.max(1,...eligible.map(s=>s.comments));
+ const primary=eligible.filter(s=>!s.gamesOnly);
+ const maxPoints=Math.max(1,...primary.map(s=>s.score)),maxComments=Math.max(1,...primary.map(s=>s.comments));
  const compare=(a:Candidate,b:Candidate)=>b.editorialScore-a.editorialScore||b.time-a.time||a.id-b.id;
  const ordered=eligible.map(s=>({...s,editorialScore:freshSectionScore(s,maxPoints,maxComments,at,false,1)})).sort(compare);
- const recent=ordered.filter(s=>isRecentSectionStory(s,at)),current=new Set(currentPageIds);
+ const recent=ordered.filter(s=>!s.gamesOnly&&isRecentSectionStory(s,at)),current=new Set(currentPageIds);
  const recentLimit=(_category:Category)=>unifiedSectionPolicyConfig.sectionCount;
  const selected:Candidate[]=[],used=new Set<number>(),identities=new Set<string>();
  const take=(s:Candidate,placement:Placement)=>{const identity=normalizeArticleUrl(s.url);if(!used.has(s.id)&&!identities.has(identity)&&selected.length<unifiedSectionPolicyConfig.maxStories){used.add(s.id);identities.add(identity);selected.push({...s,placement});}};
@@ -203,7 +205,22 @@ export function selectUnifiedMonthlyStories(pool:Candidate[],frontIds:number[],i
  // All ages compete for the same bounded collection. No reserved old slots.
  // Outside Today, meaningful engagement is required, rather than weak filler.
  for(const category of categories){
-  for(const s of ordered.filter(s=>s.category===category&&qualifiesForTodayPreview(s,current)))if(selected.filter(x=>x.category===category).length<unifiedSectionPolicyConfig.sectionCount)take(s,'section-only');
+  for(const s of ordered.filter(s=>!s.gamesOnly&&s.category===category&&qualifiesForTodayPreview(s,current)))if(selected.filter(x=>x.category===category).length<unifiedSectionPolicyConfig.sectionCount)take(s,'section-only');
+ }
+ // New Games evidence augments only the standalone view. Pinned older pools
+ // lack the marker and therefore retain their exact historical selection.
+ if(pool.some(s=>s.gamesTopicVersion===1)){
+  const selectedByUrl=new Map(selected.map(s=>[normalizeArticleUrl(s.url),s]));
+  const seenGames=new Set<string>();
+  const games=ordered.flatMap(s=>{
+   // Keep the edition's chosen representative for a normalized-URL repost.
+   const key=normalizeArticleUrl(s.url),candidate=selectedByUrl.get(key)??s;
+   if(seenGames.has(key)||candidate.gamesTopicVersion!==1||!inStorySection(candidate,'Games')||!qualifiesForTodayPreview(candidate,current))return [];
+   seenGames.add(key);return [candidate];
+  }).sort(compare).slice(0,unifiedSectionPolicyConfig.sectionCount);
+  for(const s of games){
+   take({...s,gamesOnly:true},'section-only');
+  }
  }
  return selected;
 }

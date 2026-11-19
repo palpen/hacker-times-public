@@ -1,3 +1,4 @@
+import {inStorySection} from '../lib/games-topic';
 import {installCommentLinks} from './comment-links';
 export {installCommentLinks} from './comment-links';
 import {installDiscussionCarousel} from './discussion-carousel';
@@ -5,7 +6,7 @@ import {articleMarkup} from '../lib/markup';
 import {THEME_KEY,resolveTheme,nextTheme,type Theme} from '../lib/theme';
 import {categories} from '../lib/contracts';
 import type {Story} from '../lib/news';
-export function filterStories(stories:Story[],section:string,query:string,ranked=false){const q=query.trim().toLowerCase();const result=stories.filter(s=>(section==='Today'||s.category===section||s.topics?.includes(section as typeof categories[number]))&&(!q||`${s.headline} ${s.summary} ${s.publisher}`.toLowerCase().includes(q)));return ranked?result.sort((a,b)=>(b.editorialScore??0)-(a.editorialScore??0)||b.time-a.time||a.id-b.id):result;}
+export function filterStories(stories:Story[],section:string,query:string,ranked=false){const q=query.trim().toLowerCase();const result=stories.filter(s=>inStorySection(s,section)&&(!q||`${s.headline} ${s.summary} ${s.publisher}`.toLowerCase().includes(q)));const games=section==='Games'&&stories.some(s=>s.gamesTopicVersion===1);if(ranked||games)result.sort((a,b)=>(b.editorialScore??0)-(a.editorialScore??0)||b.time-a.time||a.id-b.id);return games?result.slice(0,16):result;}
 export type SectionAge='recent'|'earlier';
 // Snapshot-relative HN submission age, not publication age or the viewer's clock.
 export function sectionStories(stories:Story[],section:string,query:string,generatedAt:string,age:SectionAge='recent'){
