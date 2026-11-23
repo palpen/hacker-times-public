@@ -12,15 +12,32 @@ function cards(stories:PublicThread[]){return stories.map(t=>`<article class="de
 export function renderDevelopingSection(news:PublicNews|null,standalone=false){
  return `<section id="developing-news" class="developing-section" aria-labelledby="developing-heading"><div class="developing-heading"><div><h2 id="developing-heading">${standalone?'Developing News':'<a href="/developing-news">Developing News</a>'}</h2><p>${developingIntroduction}</p></div></div>${news?.active.length?`<div class="developing-grid">${cards(news.active)}</div>`:`<p class="developing-empty">${news?'Our first developing stories are on the way. Check back for the latest.':'Developing stories are temporarily unavailable. Please check back shortly.'}</p>`}</section>`;
 }
-export function withDevelopingNews(html:string,news:PublicNews|null,includeSection=true){
+const recentDevelopmentWindow=72*60*60*1000;
+function renderRecentDevelopments(news:PublicNews|null,now:number):string {
+ // The persisted timeline contains only sourced publications; check times and
+ // editorial assessments that did not publish are not reader developments.
+ const recent=(news?.active??[]).flatMap(t=>{
+  const timestamp=Date.parse(t.lastMaterialAt);
+  if(t.status!=='active'||!Number.isFinite(timestamp)||timestamp>now||now-timestamp>recentDevelopmentWindow)return [];
+  const update=t.updates.find(u=>u.at===t.lastMaterialAt);
+  return update?.summary.trim()?[{story:t,update,timestamp}]:[];
+ }).sort((a,b)=>b.timestamp-a.timestamp).slice(0,2);
+ if(!recent.length)return '';
+ return `<section id="developing-news" class="developing-section developing-home" aria-labelledby="developing-heading"><h2 id="developing-heading">What changed</h2><div class="developing-grid">${recent.map(({story,update})=>`<article class="developing-card"><p class="developing-meta">Updated ${time(update.at)}</p><h3>${esc(story.title)}</h3><p>${esc(update.summary)}</p><a class="developing-follow" href="/developing-news/${encodeURIComponent(story.id)}" aria-label="${esc('Full timeline: '+story.title)}">Full timeline →</a></article>`).join('')}</div></section>`;
+}
+export function withDevelopingNews(html:string,news:PublicNews|null,includeSection=true,now=Date.now()){
  if(!html.includes('href="/developing-news"'))html=html.replace('</nav>','<a href="/developing-news">Developing News</a></nav>');
- // Persisted edition HTML can predate this feature. Add the live section at
- // response time; never rewrite immutable edition/archive records.
- if(includeSection&&!html.includes('id="developing-news"')){
-  const marker=html.match(/<section\b[^>]*class="(?:more-stories|topic-desk)[^"]*"[^>]*>/)?.[0];
-  html=marker?html.replace(marker,renderDevelopingSection(news)+marker):html.replace('<div id="today-view">','<div id="today-view">'+renderDevelopingSection(news));
+ // Insert into the saved edition without changing the immutable edition. Prior
+ // editions may lack highlights; put the module before their first topic desk.
+ const section=includeSection&&!html.includes('id="developing-news"')?renderRecentDevelopments(news,now):'';
+ if(section){
+  const highlights=/<section\b[^>]*\bid="discussion-highlights"[^>]*>[\s\S]*?<\/section>/;
+  const desk=/<section\b[^>]*class="topic-desk[^"]*"[^>]*>/;
+  if(highlights.test(html))html=html.replace(highlights,match=>match+section);
+  else if(desk.test(html))html=html.replace(desk,match=>section+match);
+  else html=html.replace(/<\/div>(\s*<section id="filtered-view")/,match=>section+match);
  }
- if(!html.includes(`href="${editionAssets.developingCss}"`))html=html.replace('</head>',`<link rel="stylesheet" href="${editionAssets.developingCss}"></head>`);
+ if(html.includes('class="developing-section developing-home"')&&!html.includes(`href="${editionAssets.developingCss}"`))html=html.replace('</head>',`<link rel="stylesheet" href="${editionAssets.developingCss}"></head>`);
  return html;
 }
 function shell(title:string,body:string){return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} — Hacker Times</title><meta name="description" content="${esc(developingIntroduction)}"><link rel="icon" href="/favicon.svg"><script>${themeInitScript}</script><link rel="preload" href="${editionAssets.font}" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${editionAssets.css}"><link rel="stylesheet" href="${editionAssets.developingCss}"><script src="/developing-news-theme.js" defer></script></head><body><main class="paper"><a class="skip-link" href="#developing-content">Skip to news</a><header class="masthead"><a class="brand" href="/" aria-label="Hacker Times home"><h1>Hacker Times</h1></a><div class="header-actions"><button id="developing-theme" class="icon-button" aria-label="Switch color theme" title="Switch color theme"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M20.5 14.4A8.6 8.6 0 0 1 9.6 3.5 8.7 8.7 0 1 0 20.5 14.4Z" fill="none" stroke="currentColor" stroke-width="1.7"/></svg></button></div></header><nav class="sections" aria-label="News sections"><a href="/">Today</a>${categories.map(name=>`<a href="/?section=${encodeURIComponent(name)}">${esc(name)}</a>`).join('')}<a href="/developing-news" class="active" aria-current="page">Developing News</a></nav><div id="notice" class="notice" role="status" hidden></div><div id="developing-content">${body}</div><footer><div class="footer-line"><a class="footer-brand" href="/">Hacker Times</a></div></footer></main></body></html>`;}

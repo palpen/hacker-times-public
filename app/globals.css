@@ -112,6 +112,8 @@ footer .edition-update{display:block;font-family:var(--sans);font-size:12px;line
 .technology-grid-desk .desk-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr;gap:20px}
 .technology-grid-desk .desk-briefs{display:contents}
 .technology-grid-desk .desk-layout>.article,.technology-grid-desk .desk-briefs>.article{margin:0;padding:16px 0;border:0;border-top:1px solid var(--line);min-width:0}
+.technology-grid-desk .desk-layout>.article:first-child{border-top:0}
+@media(width>600px){.technology-grid-desk .desk-briefs>.article:first-child{border-top:0}}
 .technology-grid-desk .desk-layout .deck{margin:8px 0;line-height:1.4}
 .technology-grid-desk .desk-layout .story-meta{margin-top:8px}
 @media(max-width:600px){.technology-grid-desk .desk-layout{grid-template-columns:1fr;grid-auto-rows:auto;gap:8px}}

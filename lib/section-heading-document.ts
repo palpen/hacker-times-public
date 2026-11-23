@@ -12,5 +12,8 @@ export function withSectionHeadingLinks(html:string){
    `<h2 id="${id}"><a href="#${id}" data-section="${name}">${name}</a></h2>`
   );
  }
- return updated===html?html:updated.replace(/<link rel="stylesheet" href="\/reader-assets\/paper-[a-f0-9]{16}\.css">/,`<link rel="stylesheet" href="${editionAssets.css}">`);
+ // Also update the immediately previous grid stylesheet in saved editions.
+ const previousGridCSS='/reader-assets/paper-45999a7f119cb388.css';
+ if(updated===html&&!html.includes('href="'+previousGridCSS+'"'))return html;
+ return updated.replace(/<link rel="stylesheet" href="\/reader-assets\/paper-[a-f0-9]{16}\.css">/,`<link rel="stylesheet" href="${editionAssets.css}">`);
 }
