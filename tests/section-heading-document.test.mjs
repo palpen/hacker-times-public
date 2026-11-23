@@ -19,6 +19,11 @@ test('saved editions get clickable section titles immediately without republishi
   assert.notEqual(retained,current);
   assert.equal(withSectionHeadingLinks(retained),current);
   assert.equal(withSectionHeadingLinks(current),current);
+  const previousGridCSS=current.replace(editionAssets.css,'/reader-assets/paper-45999a7f119cb388.css');
+  assert.notEqual(previousGridCSS,current);
+  assert.equal(withSectionHeadingLinks(previousGridCSS),current);
+  const untouchedArchive=current.replace(editionAssets.css,'/reader-assets/paper-1111111111111111.css');
+  assert.equal(withSectionHeadingLinks(untouchedArchive),untouchedArchive);
   for(const name of categories){
    const id='desk-'+name.toLowerCase();
    const old=`<h2 id="${id}">${name}</h2><button data-section="${name}">View all <span aria-hidden="true">→</span></button>`;

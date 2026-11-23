@@ -75,7 +75,48 @@ test('paid calls reserve first, cache success, never replay uncertain requests, 
 test('reader copy escapes untrusted strings, links permanent pages and hides private evidence',()=>{
  const t=thread(undefined,{status:'active',published:true,title:'<script>alert(1)</script>',summary:'An attributed report.',updates:[]});
  const html=api.renderDevelopingIndex({active:[t],quiet:[],nextCursor:null});assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('/developing-news/'+t.id));assert.ok(!html.includes('choice_probability'));assert.ok(!html.includes('source_sha'));
- const transformed=api.withDevelopingNews('<head></head><nav></nav><div id="today-view"><section class="more-stories">Other news</section></div>',{active:[t],quiet:[],nextCursor:null});assert.equal((api.withDevelopingNews(transformed,null).match(/id="developing-news"/g)||[]).length,1);
+
+});
+
+const home='<head></head><nav></nav><div id="today-view"><section class="story-grid">Lead</section><section class="more-stories discussion-highlights" id="discussion-highlights"><h2>What People Are Talking About</h2><div>Discussion content</div></section><section class="topic-desk">Desk</section></div><section id="filtered-view" hidden></section>';
+function publishedDevelopment(id,hoursAgo,overrides={}){
+ const when=new Date(Date.parse(at)-hoursAgo*3600000).toISOString();
+ const update={id:id+'-update',at:when,summary:'Latest development for '+id,source:{url:'https://fictional.example/'+id,title:'Fictional report',publisher:'Fictional News'},sourceHash:'a'.repeat(64)};
+ return thread(id,{status:'active',published:true,title:id,summary:'Standfirst for '+id,lastMaterialAt:when,updates:[update],...overrides});
+}
+const newsFor=(active,quiet=[])=>({active,quiet,nextCursor:null});
+
+test('homepage briefs follow the discussion, use latest material copy and link at most two active timelines',()=>{
+ const newest=publishedDevelopment('Fresh <story>',1);
+ const earlier=publishedDevelopment('Earlier story',2);
+ newest.updates.push({...newest.updates[0],at:'2026-11-10T10:00:00Z',summary:'Older timeline copy'});
+ const html=api.withDevelopingNews(home,newsFor([publishedDevelopment('Third recent',4),earlier,newest,publishedDevelopment('Too old',73)]),true,Date.parse(at));
+ assert.match(html,/Discussion content<\/div><\/section><section id="developing-news"[^>]*><h2[^>]*>What changed<\/h2>/);
+ assert.ok(html.indexOf('Latest development for Fresh &lt;story&gt;')<html.indexOf('Latest development for Earlier story'));
+ assert.ok(html.indexOf('Latest development for Earlier story')<html.indexOf('class="topic-desk"'));
+ assert.match(html,/href="\/developing-news\/Fresh%20%3Cstory%3E"[^>]*>Full timeline/);
+ assert.equal((html.match(/class="developing-card"/g)||[]).length,2);
+ assert.doesNotMatch(html,/Third recent|Too old|Standfirst|Older timeline copy|checked hourly/);
+ assert.equal(api.withDevelopingNews(html,newsFor([newest]),true,Date.parse(at)),html);
+});
+
+test('homepage hides stale or unavailable updates while keeping navigation, even for archive responses',()=>{
+ const now=Date.parse(at);
+ for(const news of [null,newsFor([]),newsFor([publishedDevelopment('Stale',72+1/3600000),publishedDevelopment('Missing update',0,{updates:[]}),publishedDevelopment('Future',-1),publishedDevelopment('Empty copy',1,{updates:[{at:new Date(now-3600000).toISOString(),summary:'  '}]}),publishedDevelopment('Invalid timestamp',1,{lastMaterialAt:'invalid'}),publishedDevelopment('Misfiled quiet',0,{status:'quiet'})],[publishedDevelopment('Quiet story',0,{status:'quiet'})])]){
+  const html=api.withDevelopingNews(home,news,true,now);
+  assert.match(html,/href="\/developing-news">Developing News/);
+  assert.doesNotMatch(html,/What changed|developing-empty/);
+ }
+ const boundary=newsFor([publishedDevelopment('Exactly 72h',72)]);
+ const archive=api.withDevelopingNews(home,boundary,false,now);
+ assert.match(archive,/href="\/developing-news">Developing News/);
+ assert.doesNotMatch(archive,/What changed/);
+ const legacy=home.replace(/<section class="more-stories discussion-highlights"[\s\S]*?<\/section>/,'');
+ const html=api.withDevelopingNews(legacy,boundary,true,now);
+ assert.match(html,/<\/article><\/div><\/section><section class="topic-desk"/);
+ assert.match(html,/Exactly 72h/);
+ const dedicated=api.renderDevelopingIndex(newsFor([publishedDevelopment('Older but active',96)],[publishedDevelopment('Quiet',1,{status:'quiet'})]));
+ assert.match(dedicated,/Older but active/);assert.match(dedicated,/Earlier coverage/);assert.doesNotMatch(dedicated,/What changed/);
 });
 
 test('real SQLite keeps six-month archives searchable, history paginated and private state off public API',async()=>{
