@@ -1,0 +1,20 @@
+/* A separate reader stylesheet so retained editions keep their original CSS. */
+.mobile-sections-trigger,.mobile-sections-index,.mobile-sections-sheet{display:none}
+@media(max-width:680px){
+ .mobile-sections-trigger:not([hidden]){position:fixed;z-index:20;right:14px;bottom:max(14px,env(safe-area-inset-bottom));display:inline-flex;align-items:center;gap:8px;min-height:46px;padding:0 15px;border:1px solid var(--strong-line,var(--line));background:var(--paper);color:var(--ink);box-shadow:0 2px 12px #0006;border-radius:5px;font:700 13px var(--sans);cursor:pointer}
+ .mobile-sections-sheet[open]{display:block;position:fixed;box-sizing:border-box;width:100%;max-width:none;max-height:88dvh;margin:auto 0 0;padding:10px 20px max(22px,env(safe-area-inset-bottom));border:0;border-top:2px solid var(--ink);background:var(--paper);color:var(--ink);box-shadow:0 -8px 40px #0005;overscroll-behavior:contain}
+ html:has(.mobile-sections-sheet[open]){overflow:hidden}
+ .mobile-sections-sheet::backdrop{background:#0008}
+ .mobile-sections-handle{width:32px;height:3px;border-radius:10px;background:var(--muted);opacity:.55;margin:0 auto 7px}
+ .mobile-sections-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+ .mobile-sections-heading h2,.mobile-sections-index h2{font:700 27px/1.1 var(--display,Georgia,serif);letter-spacing:-.45px;margin:0}
+ .mobile-sections-close{display:grid;place-items:center;width:44px;height:44px;background:none;border:0;color:var(--ink);font:28px/1 var(--sans);cursor:pointer}
+ .mobile-sections-trigger:focus-visible,.mobile-sections-links a:focus-visible,.mobile-sections-close:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+ .mobile-sections-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:17px}
+ .mobile-sections-links a{display:flex;align-items:center;justify-content:space-between;min-height:46px;gap:5px;border-top:1px solid var(--line);font:600 14px/1.2 var(--sans);color:var(--ink);text-decoration:none;padding:0 4px;overflow-wrap:anywhere}
+ .mobile-sections-sheet [aria-current=page]{background:var(--soft,var(--line));font-weight:700}
+ .mobile-sections-sheet [aria-current=page]::after{content:'✓';font-size:13px}
+ .mobile-sections-index{display:block;margin:3px 0 16px;padding:0 0 3px}
+ .mobile-sections-index h2{margin:0 0 13px;font-size:23px}
+ .mobile-sections-index a::after{content:'›';color:var(--muted);font-size:17px}
+}
