@@ -5,18 +5,37 @@ import {fileURLToPath} from 'node:url';
 import {validateScheduledConfig} from './validate-scheduled-config.mjs';
 import {validateDispatchContext, validateReleaseContext, validateStagingConfig} from './validate-staging-config.mjs';
 
-export function validateLiveTriggers(config, {readers, schedules, subdomain}, {allowTransition = false} = {}) {
+const halfHour = '*/30 * * * *';
+const versionId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const unexpectedLiveState = () => new Error('Public readers, workers.dev access or schedule do not match the reviewed active/paused configuration.');
+
+function scheduleState({schedules,subdomain}) {
+  if (subdomain?.enabled !== true || !Array.isArray(schedules?.schedules)) throw unexpectedLiveState();
+  if (!schedules.schedules.length) return false;
+  if (schedules.schedules.length === 1 && schedules.schedules[0]?.cron === halfHour) return true;
+  throw unexpectedLiveState();
+}
+
+function readerState(config, readers) {
   const expected = [...config.routes.map(route => 'https://'+route.pattern), 'https://hacker-times-production.pspenano.workers.dev'].sort();
-  const active = config.vars.SCHEDULE_ENABLED === 'true';
-  const matches = enabled => Array.isArray(readers) && readers.every(reader =>
-    reader.health?.mode === 'production' && reader.health.publicationEnabled === enabled && reader.health.scheduleEnabled === enabled) &&
-    Array.isArray(schedules?.schedules) && JSON.stringify(schedules.schedules.map(schedule => schedule.cron).sort()) === JSON.stringify(enabled ? ['*/30 * * * *'] : []);
   if (!Array.isArray(readers) || JSON.stringify(readers.map(reader=>reader.origin).sort()) !== JSON.stringify(expected) ||
       readers.some(reader=>reader.status!==200 || !/^e-[a-f0-9]{24}$/.test(reader.version) || reader.headerVersion!==reader.version) ||
-      new Set(readers.map(reader=>reader.version)).size!==1 ||
-      !(matches(active) || (allowTransition && matches(!active))) || subdomain?.enabled !== true) {
-    throw new Error('Public readers, workers.dev access or schedule do not match the reviewed active/paused configuration.');
+      new Set(readers.map(reader=>reader.version)).size!==1) throw unexpectedLiveState();
+  for (const enabled of [true,false]) {
+    if (readers.every(({health})=>health?.mode==='production'&&health.publicationEnabled===enabled&&health.scheduleEnabled===enabled)) return enabled;
   }
+  throw unexpectedLiveState();
+}
+
+export function validateLiveTriggers(config, live) {
+  const active = config.vars.SCHEDULE_ENABLED === 'true';
+  if (readerState(config,live.readers)!==active || scheduleState(live)!==active) throw unexpectedLiveState();
+}
+
+function verifyDomains(config, domains) {
+  const expected=config.routes.map(route=>route.pattern).sort();
+  if (!Array.isArray(domains) || domains.some(domain=>domain.service!==config.name||domain.environment!=='production'||domain.enabled!==true) ||
+      JSON.stringify(domains.map(domain=>domain.hostname).sort())!==JSON.stringify(expected)) throw new Error('Custom domains do not match the reviewed Worker configuration.');
 }
 
 export function uploadedVersion(output) {
@@ -36,7 +55,7 @@ export async function waitForUploadedVersion(version, {readVersion, pause = ms =
     try {
       const value = await readVersion(version);
       if (value?.id !== version) throw new Error('Uploaded version readback did not match the expected version.');
-      return;
+      return value;
     } catch (error) {
       // Retry only the known read-after-upload visibility error. This never
       // repeats an upload or activation, or masks authentication/transport errors.
@@ -46,41 +65,66 @@ export async function waitForUploadedVersion(version, {readVersion, pause = ms =
   }
 }
 
-export async function deployScheduledVersion({config, sha, readTriggers, readVersion, readMigrationTag, runWrangler, setSchedules, operation = 'deploy'}) {
+export async function deployScheduledVersion({config, sha, readTriggers, readVersion, readMigrationTag, runWrangler, setSchedules, operation = 'deploy', repairVersion, readControlState}) {
   if (!['deploy', 'pause', 'resume'].includes(operation)) throw new Error('Expected deploy, pause or resume.');
   if (operation === 'pause') validateStagingConfig(config); else validateScheduledConfig(config);
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Exact reviewed commit SHA required.');
   if (typeof readMigrationTag !== 'function') throw new Error('Remote migration state readback required.');
   if (typeof readVersion !== 'function') throw new Error('Uploaded version readback required.');
   if (operation !== 'deploy' && typeof setSchedules !== 'function') throw new Error('Schedule control required.');
-  validateLiveTriggers(config, await readTriggers(), {allowTransition: operation !== 'deploy'});
+  if (repairVersion !== undefined && (operation==='deploy'||!versionId.test(repairVersion)||typeof readControlState!=='function')) throw new Error('Schedule-only repair requires an exact Worker version and a pause or resume dispatch.');
   const configPath = operation === 'pause' ? 'wrangler.production.jsonc' : 'wrangler.scheduled.jsonc';
+  const tag = operation==='deploy'?sha:sha+'-'+operation;
+  const active = config.vars.SCHEDULE_ENABLED==='true';
+  const readDeployment=()=>JSON.parse(runWrangler(['deployments','status','--config',configPath,'--json']));
+  const readRepairState=async()=>{
+    const state=await readControlState();
+    verifyDomains(config,state.domains);
+    return state;
+  };
+  const live=repairVersion?await readRepairState():await readTriggers();
+  const scheduled=scheduleState(live);
+  const serving=repairVersion?active:readerState(config,live.readers);
+  if (operation==='deploy' && (!scheduled||!serving)) throw unexpectedLiveState();
+  if (scheduled!==serving && serving!==active) throw unexpectedLiveState();
   const migrationTag=await readMigrationTag();
   const targetTag=config.migrations.at(-1).tag;
   const needsMigration=migrationTag!==targetTag;
-  // The only reviewed storage change adds an empty namespace. Unknown remote
-  // states, resets, deletions and migration during pause/resume fail closed.
+  // The only reviewed migration adds an empty namespace during a code release.
   if(needsMigration&&(operation!=='deploy'||migrationTag!=='production-v1'||targetTag!=='developing-news-v1'))throw new Error('Unreviewed Durable Object migration state; no deployment attempted.');
-  let version;
+  let version, deployment, reuse=false;
+  if (operation!=='deploy'&&serving===active) {
+    deployment=readDeployment();
+    const activeId=deployment?.versions?.[0]?.version_id;
+    if(!versionId.test(activeId??''))throw new Error('Active Worker version readback required.');
+    verifyDeployment(deployment,repairVersion||activeId);
+    const current=await readVersion(activeId);
+    if(current?.id!==activeId)throw new Error('Active version readback did not match.');
+    reuse=current.annotations?.['workers/tag']===tag;
+    if(!reuse&&(repairVersion||scheduled!==serving))throw new Error('Active Worker version tag does not match the reviewed publishing control.');
+    if(reuse)version=activeId;
+  }
   if(needsMigration){
-    const output=runWrangler(['deploy','--config',configPath,'--tag',sha,'--message','Reviewed commit '+sha]);
+    const output=runWrangler(['deploy','--config',configPath,'--tag',tag,'--message','Reviewed commit '+sha]);
     const matches=[...output.matchAll(/Current Version ID:\s*([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/g)];
     if(matches.length!==1)throw new Error('Cannot identify migrated deployment; inspect deployment before retrying.');
     version=matches[0][1];
     if(await readMigrationTag()!==targetTag)throw new Error('Durable Object migration readback did not match.');
     await waitForUploadedVersion(version,{readVersion});
-  }else{
-    version=uploadedVersion(runWrangler(['versions','upload','--config',configPath,'--tag',sha,'--message','Reviewed commit '+sha]));
-    await waitForUploadedVersion(version,{readVersion});
+  }else if(!reuse){
+    version=uploadedVersion(runWrangler(['versions','upload','--config',configPath,'--tag',tag,'--message','Reviewed commit '+sha]));
+    const uploaded=await waitForUploadedVersion(version,{readVersion});
+    if(operation!=='deploy'&&uploaded.annotations?.['workers/tag']!==tag)throw new Error('Uploaded publishing control version tag did not match.');
     runWrangler(['versions','deploy',version+'@100','--config',configPath,'--yes','--message','Reviewed commit '+sha]);
   }
-  const deployment = JSON.parse(runWrangler(['deployments', 'status', '--config', configPath, '--json']));
+  if(!reuse)deployment=readDeployment();
   verifyDeployment(deployment, version);
-  // Ordinary releases preserve triggers; the additive migration reapplies the
-  // identical pre-validated routes and cron. Explicit pause/resume changes cron.
-  if (operation !== 'deploy') await setSchedules(config.triggers.crons.map(cron => ({cron})));
-  validateLiveTriggers(config, await readTriggers());
-  return {version, deploymentId:deployment.id, createdAt:deployment.created_on, commit:sha, operation};
+  if(operation!=='deploy'&&scheduled!==active)await setSchedules(config.triggers.crons.map(cron=>({cron})));
+  if(repairVersion){
+    verifyDeployment(readDeployment(),version);
+    if(await readMigrationTag()!==targetTag||scheduleState(await readRepairState())!==active)throw new Error('Schedule repair readback did not match.');
+  }else validateLiveTriggers(config,await readTriggers());
+  return {version,deploymentId:deployment.id,createdAt:deployment.created_on,commit:sha,operation,...(repairVersion?{scheduleOnly:true}:{})};
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -106,9 +150,18 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       return value.result;
     };
     const result = await deployScheduledVersion({config, sha:process.env.GITHUB_SHA, operation,
+      repairVersion:process.env.PUBLISHING_REPAIR_VERSION||undefined,
       readMigrationTag:async()=>(await api('/workers/services/'+config.name)).default_environment?.script?.migration_tag,
       readVersion:version=>api('/workers/scripts/'+config.name+'/versions/'+version),
       setSchedules:schedules=>api('/workers/scripts/'+config.name+'/schedules', schedules),
+      readControlState:async()=>{
+        const [schedules,subdomain,domains]=await Promise.all([
+          api('/workers/scripts/'+config.name+'/schedules'),
+          api('/workers/services/'+config.name+'/environments/production/subdomain'),
+          api('/workers/domains?service='+config.name+'&environment=production'),
+        ]);
+        return {schedules,subdomain,domains};
+      },
       readTriggers:async()=>{
         const [readers,schedules,subdomain] = await Promise.all([
           Promise.all([...config.routes.map(route=>'https://'+route.pattern),'https://hacker-times-production.pspenano.workers.dev'].map(async origin=>{

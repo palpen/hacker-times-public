@@ -19,8 +19,9 @@ try{
  const response=await worker.fetch('/status');
  if(!response.ok)throw Error('Monitor status unavailable');
  const state=await response.json();
- console.log('Live monitor state:',JSON.stringify(state));
+ console.log('Live monitor state:',JSON.stringify({checkedAt:state.checkedAt,emailFailed:state.emailFailed,publisherRecoveryConnected:state.publisherRecoveryConnected}));
  if(!state.checkedAt||Date.now()-Date.parse(state.checkedAt)>600_000||state.emailFailed)throw Error('Monitor has not completed a recent check or mail delivery failed');
+ if(state.publisherRecoveryConnected!==true)throw Error('Monitor could not read the publisher recovery signal');
  if(process.env.MONITOR_TEST_EMAIL==='true'){
   const test=await worker.fetch('/test-mail',{method:'POST'});
   if(!test.ok)throw Error('Test mail failed: '+test.status);

@@ -49,7 +49,9 @@ test('scheduled and pause deployments serialize against the same Worker with iso
     assert.equal(job.steps.some(s => s['continue-on-error']), false);
   }
   const steps = workflow.jobs.deploy.steps;
-  assert.deepEqual(steps.at(-1).env, staging.jobs.deploy.steps.at(-1).env);
+  const {PUBLISHING_REPAIR_VERSION,...stagingCredentials}=staging.jobs.deploy.steps.at(-1).env;
+  assert.ok(PUBLISHING_REPAIR_VERSION);
+  assert.deepEqual(steps.at(-1).env,stagingCredentials);
   assert.match(steps.at(-1).run, /node scripts\/deploy-scheduled-version\.mjs/);
   for (const step of [...workflow.jobs.validate.steps, ...steps.slice(0, -1)]) assert.equal(step.env, undefined);
   assert.match(steps.at(-2).run, /validate-scheduled-config\.mjs --github-release/);
@@ -88,47 +90,96 @@ const pausedTriggers = () => {
   return value;
 };
 
-test('pause and resume change only the reviewed cron after activating the exact code version', async () => {
-  for (const operation of ['pause', 'resume']) {
-    const target = operation === 'pause' ? pausedConfig : config;
-    const finalState = operation === 'pause' ? pausedTriggers : triggers;
-    const initialState = operation === 'pause' ? triggers : pausedTriggers;
-    for (const initial of [initialState, finalState]) {
-      const events = []; let reads = 0;
-      const result = await deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config:target,readVersion:versionDetails, operation, sha:'a'.repeat(40),
-        readTriggers:async()=>++reads === 1 ? initial() : finalState(),
-        runWrangler:args=>{
-          events.push(args);
-          return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
-        },
-        setSchedules:async schedules=>{events.push(schedules);},
-      });
-      assert.equal(result.operation, operation);
-      assert.equal(reads, 2);
-      assert.deepEqual(events.at(-1), operation === 'pause' ? [] : [{cron:'*/30 * * * *'}]);
-      assert.equal(events[0][events[0].indexOf('--config')+1], operation === 'pause' ? 'wrangler.production.jsonc' : 'wrangler.scheduled.jsonc');
-      assert.equal(events.some(args=>args[0] === 'deploy' || args[0] === 'triggers'), false);
+function controlFixture(operation){
+  const target=operation==='pause'?pausedConfig:config,active=operation==='resume',sha='a'.repeat(40);
+  const sourceVersion='22345678-1234-1234-1234-123456789abc';
+  let serving=sourceVersion,scheduled=!active,uploadTag;
+  const events=[];
+  const readTriggers=async()=>{
+    const state=(serving===version?active:!active)?triggers():pausedTriggers();
+    state.schedules.schedules=scheduled?[{cron:'*/30 * * * *'}]:[];
+    return state;
+  };
+  const options={config:target,operation,sha,readTriggers,readMigrationTag:async()=>'developing-news-v1',
+    readVersion:async id=>({id,annotations:{'workers/tag':id===version?uploadTag:'b'.repeat(40)}}),
+    runWrangler:args=>{
+      if(args[0]==='deployments')return JSON.stringify({versions:[{version_id:serving,percentage:100}]});
+      events.push(args.slice(0,2).join(' '));
+      if(args[1]==='upload'){
+        assert.equal(args[args.indexOf('--config')+1],operation==='pause'?'wrangler.production.jsonc':'wrangler.scheduled.jsonc');
+        uploadTag=args[args.indexOf('--tag')+1];
+        assert.equal(uploadTag,sha+'-'+operation);
+        return 'Worker Version ID: '+version;
+      }
+      assert.equal(args[2],version+'@100');
+      serving=version;
+      return '';
+    },
+    setSchedules:async schedules=>{
+      events.push('schedule');
+      verifyDeployment({versions:[{version_id:serving,percentage:100}]},version);
+      assert.deepEqual(schedules,active?[{cron:'*/30 * * * *'}]:[]);
+      scheduled=active;
+    },
+  };
+  return {options,events,active};
+}
+
+for(const operation of ['pause','resume']){
+  test(operation+' retries a failed schedule write and a lost success response without another upload',async()=>{
+    for(const applied of [false,true]){
+      const {options,events}=controlFixture(operation);
+      const write=options.setSchedules;
+      options.setSchedules=async schedules=>{
+        if(applied)await write(schedules);else events.push('schedule failed');
+        throw new Error('fictional schedules response lost');
+      };
+      await assert.rejects(deployScheduledVersion(options),/response lost/);
+      options.setSchedules=write;
+      const result=await deployScheduledVersion(options);
+      assert.equal(result.version,version);
+      assert.equal(result.operation,operation);
+      assert.deepEqual(events,applied?['versions upload','versions deploy','schedule']:['versions upload','versions deploy','schedule failed','schedule']);
+      await deployScheduledVersion(options);
+      assert.equal(events.filter(event=>event==='schedule').length,1);
     }
-  }
-});
+  });
+
+  test(operation+' schedule-only repair verifies the exact active version even when readers fail',async()=>{
+    const {options,events}=controlFixture(operation),write=options.setSchedules;
+    options.setSchedules=async()=>{throw new Error('fictional schedule write failed');};
+    await assert.rejects(deployScheduledVersion(options),/write failed/);
+    const readTriggers=options.readTriggers;
+    const readControlState=async()=>({...await readTriggers(),domains:options.config.routes.map(route=>({hostname:route.pattern,service:options.config.name,environment:'production',enabled:true}))});
+    Object.assign(options,{repairVersion:version,readControlState,readTriggers:async()=>assert.fail('reader must not gate schedule-only repair'),setSchedules:write});
+    await assert.rejects(deployScheduledVersion({...options,repairVersion:'22345678-1234-1234-1234-123456789abc'}),/not serving 100%/);
+    await assert.rejects(deployScheduledVersion({...options,sha:'c'.repeat(40)}),/version tag/);
+    await assert.rejects(deployScheduledVersion({...options,readMigrationTag:async()=>'production-v1'}),/Unreviewed/);
+    await assert.rejects(deployScheduledVersion({...options,readControlState:async()=>({...await readControlState(),domains:[]})}),/Custom domains/);
+    assert.deepEqual(events,['versions upload','versions deploy']);
+    assert.equal((await deployScheduledVersion(options)).scheduleOnly,true);
+    assert.deepEqual(events,['versions upload','versions deploy','schedule']);
+  });
+}
 
 test('publishing controls reject unexpected live state and verify the requested result', async () => {
-  const unexpected = pausedTriggers();
-  unexpected.schedules.schedules = [{cron:'* * * * *'}];
-  let mutations = 0;
-  const runWrangler = args => {
-    mutations++;
-    return args.includes('upload') ? 'Worker Version ID: '+version : args.includes('status') ? JSON.stringify({versions:[{version_id:version,percentage:100}]}) : '';
-  };
-  for (const operation of ['pause', 'resume']) {
-    await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config:operation === 'pause' ? pausedConfig : config, readVersion:versionDetails,
-      operation, sha:'a'.repeat(40), readTriggers:async()=>unexpected, runWrangler, setSchedules:async()=>{mutations++;}}));
+  for(const operation of ['pause','resume']){
+    const {options,events,active}=controlFixture(operation);
+    const unexpected=active?pausedTriggers():triggers();
+    unexpected.schedules.schedules=[{cron:'* * * * *'}];
+    await assert.rejects(deployScheduledVersion({...options,readTriggers:async()=>unexpected}),/do not match/);
+    const wrongDirection=active?pausedTriggers():triggers();
+    wrongDirection.schedules.schedules=active?[{cron:'*/30 * * * *'}]:[];
+    await assert.rejects(deployScheduledVersion({...options,readTriggers:async()=>wrongDirection}),/do not match/);
+    const targetReaders=active?triggers():pausedTriggers();
+    targetReaders.schedules.schedules=active?[]:[{cron:'*/30 * * * *'}];
+    await assert.rejects(deployScheduledVersion({...options,readTriggers:async()=>targetReaders}),/version tag/);
+    assert.deepEqual(events,[]);
+    const readTriggers=options.readTriggers;let reads=0;
+    await assert.rejects(deployScheduledVersion({...options,readTriggers:async()=>++reads===1?readTriggers():wrongDirection}),/do not match/);
   }
-  assert.equal(mutations, 0);
-  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails, operation:'resume', sha:'a'.repeat(40),
-    readTriggers:async()=>pausedTriggers(), runWrangler, setSchedules:async()=>{}}), /do not match/);
-  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails, sha:'a'.repeat(40),
-    readTriggers:async()=>pausedTriggers(), runWrangler}), /do not match/);
+  await assert.rejects(deployScheduledVersion({readMigrationTag:async()=>'developing-news-v1',config,readVersion:versionDetails,sha:'a'.repeat(40),
+    readTriggers:async()=>pausedTriggers(),runWrangler:()=>assert.fail('must not deploy')}),/do not match/);
 });
 
 test('automatic checks have no deployment credentials or production mutations', () => {
@@ -152,7 +203,12 @@ test('automatic releases and manual controls share main-only restrictions and se
   ]) {
     const control = readWorkflow(file);
     assert.equal(control.name, name);
-    assert.deepEqual(control.on, operation === 'deploy' ? {push:{branches:['main']}, workflow_dispatch:null} : {workflow_dispatch:null});
+    if(operation==='deploy')assert.deepEqual(control.on,{push:{branches:['main']},workflow_dispatch:null});
+    else {
+      assert.deepEqual(Object.keys(control.on),['workflow_dispatch']);
+      assert.equal(control.on.workflow_dispatch.inputs.repair_version.type,'string');
+      assert.equal(control.jobs.deploy.steps.at(-1).env.PUBLISHING_REPAIR_VERSION,'${{ inputs.repair_version }}');
+    }
     assert.deepEqual(control.concurrency, {group:'hacker-times-production', 'cancel-in-progress':false});
     assert.equal(control.jobs.deploy.environment, 'production');
     assert.equal(control.jobs.deploy.needs, 'validate');

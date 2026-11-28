@@ -115,24 +115,18 @@ function makeStory(source: Source, selected: Candidate, publisher: string, copy?
 }
 function checkedUsage(value: unknown, maxOutputTokens: number): ModelUsage | null {
   if (!object(value)) return null;
-  const input = value.input_tokens;
-  const output = value.output_tokens;
-  const total = value.total_tokens;
-  if (!Number.isSafeInteger(input) || !Number.isSafeInteger(output) || !Number.isSafeInteger(total) ||
-    typeof input !== 'number' || typeof output !== 'number' || typeof total !== 'number' ||
-    input <= 0 || input > MAX_RESERVED_INPUT_TOKENS || output < 0 || output > maxOutputTokens || total !== input + output) {
-    return null;
-  }
+  const usage=readValidatedUsage({inputTokens:value.input_tokens,outputTokens:value.output_tokens,totalTokens:value.total_tokens},maxOutputTokens);
+  if(!usage)return null;
   // Details are optional, but when present they must not contradict the totals.
   for (const [details, key, maximum] of [
-    [value.input_tokens_details, 'cached_tokens', input],
-    [value.output_tokens_details, 'reasoning_tokens', output],
+    [value.input_tokens_details, 'cached_tokens', usage.inputTokens],
+    [value.output_tokens_details, 'reasoning_tokens', usage.outputTokens],
   ] as const) {
     if (details !== undefined && details !== null && (!object(details) ||
       (details[key] !== undefined && (!Number.isSafeInteger(details[key]) ||
         typeof details[key] !== 'number' || details[key] < 0 || details[key] > maximum)))) return null;
   }
-  return { inputTokens: input, outputTokens: output, totalTokens: total };
+  return usage;
 }
 const safetyCodes = new Set(['content_filter', 'content_policy_violation', 'safety_violation', 'moderation_blocked', 'refusal']);
 function safetyCode(value: unknown): boolean {
@@ -212,11 +206,28 @@ function validateCopy(value: unknown, provenance: NonNullable<Story['summarySour
   return copy;
 }
 
+export function editorialEvidence(source:Source){
+  if(source.kind==='archived_summary'||source.kind==='unavailable')return null;
+  const excerpt=source.excerpt.trim();
+  const text=excerpt||(source.kind==='hn_post'?'':source.description.trim());
+  if(!text)return null;
+  const provenance:NonNullable<Story['summarySource']>=source.kind==='publisher_feed'?'publisher_feed':source.kind==='hn_post'?'hn_post':excerpt?'article':'page_description';
+  return {text,provenance};
+}
+
+export function readValidatedUsage(value:unknown,maxOutputTokens:number):ModelUsage|null {
+  if(!object(value))return null;
+  const {inputTokens,outputTokens,totalTokens}=value as ModelUsage;
+  if(![inputTokens,outputTokens,totalTokens].every(n=>Number.isSafeInteger(n)&&n>=0)||inputTokens<=0||inputTokens>MAX_RESERVED_INPUT_TOKENS||outputTokens>maxOutputTokens||totalTokens!==inputTokens+outputTokens)return null;
+  return {inputTokens,outputTokens,totalTokens};
+}
+
 /** Recheck a retained bounded draft after a validator fix, without any API call. */
 export function reviewEditorialDraft(source:Source,selected:Candidate,draft:unknown):EditorialModelResult {
   checkSource(source,selected);
-  if(source.kind==='unavailable'||(!source.excerpt.trim()&&!source.description.trim()))return preflight('Pinned source evidence required for draft review');
-  const provenance=source.kind==='publisher_feed'?'publisher_feed':source.kind==='hn_post'?'hn_post':source.excerpt.trim()?'article':'page_description';
+  const evidence=editorialEvidence(source);
+  if(!evidence)return preflight('Pinned source evidence required for draft review');
+  const {provenance}=evidence;
   const usage={inputTokens:0,outputTokens:0,totalTokens:0};
   return {story:makeStory(source,selected,publisherFor(selected,source),validateCopy(draft,provenance,selected.title,usage)),usage,requested:false};
 }
@@ -239,8 +250,7 @@ export async function generateEditorialCopy(
     if(!copy)return preflight('Archived copy requires a pinned publication');
     return {story:makeStory(source,selected,publisher,{headline:copy.headline,summary:copy.summary,shortSummary:copy.shortSummary,summarySource:'archived_summary'}),usage:{inputTokens:0,outputTokens:0,totalTokens:0},requested:false};
   }
-  const evidence = source.kind === 'unavailable' ? '' : source.kind === 'hn_post' ? source.excerpt.trim() :
-    source.excerpt.trim() || source.description.trim();
+  const evidence = editorialEvidence(source);
   if (!evidence) {
     return { story: makeStory(source, selected, publisher), usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, requested: false };
   }
@@ -249,7 +259,7 @@ export async function generateEditorialCopy(
     !Number.isSafeInteger(config.maxOutputTokens) || config.maxOutputTokens < 1 || config.maxOutputTokens > MAX_MODEL_OUTPUT_TOKENS) {
     return preflight('Explicit editorial model, credential and bounded output limit are required');
   }
-  const provenance = source.kind === 'publisher_feed' ? 'publisher_feed' : source.kind === 'hn_post' ? 'hn_post' : source.excerpt.trim() ? 'article' : 'page_description';
+  const {provenance,text:sourceText}=evidence;
   const request = {
     model: config.model,
     // Do not inherit a project's auto/Priority tier: budget rates cover Standard.
@@ -270,7 +280,7 @@ export async function generateEditorialCopy(
       'If evidence is insufficient, set summarySource="unavailable", headline to originalTitle exactly, and summary and shortSummary to empty strings.',
       'A safety refusal is not insufficient evidence. Never conceal a refusal by labeling it unavailable.',
     ].join(' '),
-    input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ originalTitle: selected.title, evidenceKind: provenance, sourceText: evidence }) }] }],
+    input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ originalTitle: selected.title, evidenceKind: provenance, sourceText }) }] }],
     text: { format: {
       type: 'json_schema', name: 'editorial_copy', strict: true,
       schema: {

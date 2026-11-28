@@ -26,9 +26,10 @@ export function chooseLead(root:Root,pool:Candidate[],frontPageIds:number[],at:n
   if(nextLedger.retiredIds.length>20_000||nextLedger.retiredKeys.length>20_000||observations.length>20_000)throw new RequestError('Lead ledger capacity reached; maintenance required without resetting history',409);
   return {audit,nextLedger};
 }
+export const MAX_SNAPSHOT_AGE_MS=48*3600_000;
 export function pinSnapshot(root:Root,fetched:SourceSnapshot):Snapshot {
   const at=Date.parse(fetched.generatedAt);
-  if(!Number.isFinite(at)||new Date(at).toISOString()!==fetched.generatedAt||at>Date.now()+300_000||at<Date.now()-48*3600_000||(root.generatedAt&&at<=Date.parse(root.generatedAt)))throw new RequestError('Invalid or non-advancing source timestamp',409);
+  if(!Number.isFinite(at)||new Date(at).toISOString()!==fetched.generatedAt||at>Date.now()+300_000||at<Date.now()-MAX_SNAPSHOT_AGE_MS||(root.generatedAt&&at<=Date.parse(root.generatedAt)))throw new RequestError('Invalid or non-advancing source timestamp',409);
   const {audit,nextLedger}=chooseLead(root,fetched.rankedStories,fetched.frontPageIds,Date.parse(fetched.generatedAt));
   if(fetched.selectionVersion!==6||fetched.layoutVersion!==3||fetched.policyVersion!==unifiedSectionPolicyVersion||fetched.sourcePages.length!==3)throw new RequestError('Unsupported complete collection contract',409);
   const expected=selectUnifiedMonthlyStories(fetched.rankedStories,fetched.frontPageIds,root.ledger.active?.id,at,audit.leadId!,fetched.sourcePages.flatMap(x=>x.ids));

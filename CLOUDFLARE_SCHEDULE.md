@@ -47,9 +47,9 @@ so the deployment token needs no DNS/zone read access.
 
 ### Pause and resume automatic publishing
 
-Run **Pause automatic publishing** from `main` to set all six live flags off and
+Run **Pause automatic publishing** from `main` to set all seven live flags off and
 remove cron. Readers continue serving the saved edition and archives. Run
-**Resume automatic publishing** from `main` to restore the six flags and the one
+**Resume automatic publishing** from `main` to restore the seven flags and the one
 `*/30 * * * *` cron. These are live production controls, not a staging environment.
 They validate and deploy the selected main commit as well as changing the schedule.
 Resume restarts the existing pending work; it does not clear safety holds or history.
@@ -57,10 +57,19 @@ Resume restarts the existing pending work; it does not clear safety holds or his
 Both controls preserve the account, Worker, Durable Object, migration history,
 remote secrets and custom-domain bindings. They upload and activate an exact Worker
 version, update only the schedules API, and verify the resulting public flags and
-cron. Repeating the same operation is permitted. Unexpected live configuration
-fails closed. A failed operation can leave a partial change; inspect the active
-version, flags and schedule before retrying. A normal **Deploy production** refuses
-a paused configuration; use **Resume automatic publishing** first when appropriate.
+cron. If activation succeeded and the schedule update failed, rerun the original
+workflow from its run page. The retry verifies the active version's commit and
+operation tag, migration and known schedule, then finishes the schedule step. If
+the first write succeeded but its response was lost, the retry verifies the
+desired schedule and exits.
+
+If any public reader is unavailable, inspect the active deployment in Cloudflare
+and confirm it serves the intended version at 100%. Rerun the same pause or resume
+control on the same main commit with the active UUID in `repair_version`. This
+schedule-only mode checks the exact version, commit and operation tag, migration,
+workers.dev setting and custom domains before writing. Verify public reader health
+separately after schedule-only repair. A normal **Deploy production** requires
+healthy readers and a fully active configuration.
 
 The files retain their historical names: `wrangler.production.jsonc` is the paused
 configuration and `wrangler.scheduled.jsonc` is the active configuration. They both

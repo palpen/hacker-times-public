@@ -77,7 +77,8 @@ test('only manual dispatches from the exact repository main branch are accepted'
 });
 
 test('workflow is manual-only, least-privilege, environment-gated and serial', () => {
-  assert.deepEqual(workflow.on, {workflow_dispatch: null});
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
+  assert.equal(workflow.on.workflow_dispatch.inputs.repair_version.required,false);
   assert.deepEqual(workflow.permissions, {contents: 'read'});
   assert.deepEqual(workflow.concurrency, {group: 'hacker-times-production', 'cancel-in-progress': false});
   assert.deepEqual(Object.keys(workflow.jobs), ['validate', 'deploy']);
@@ -109,7 +110,7 @@ test('workflow pins official actions and checks out the exact SHA without persis
 test('only final deploy receives the token, after locked install, tests, typecheck, lint and dry-run', () => {
   const steps = workflow.jobs.deploy.steps;
   const final = steps.at(-1);
-  assert.deepEqual(final.env, {CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+  assert.deepEqual(final.env, {PUBLISHING_REPAIR_VERSION:'${{ inputs.repair_version }}',CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
     CLOUDFLARE_ACCOUNT_ID: 'dc81a3cb74492ea63c9f3e14f13711a2'});
   assert.equal(final.run, 'test -n "$CLOUDFLARE_API_TOKEN"\nnode scripts/deploy-scheduled-version.mjs pause\n');
   assert.equal(workflowText.match(/secrets\./g)?.length, 1);

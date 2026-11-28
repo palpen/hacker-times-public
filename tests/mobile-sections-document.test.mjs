@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {build} from 'esbuild';
+import {cloudflareNode} from './fixtures/cloudflare-node.mjs';
 
 test('current and retained editions get one mobile stylesheet and reader without mutating saved records',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-mobile-sections-'));
@@ -14,7 +15,7 @@ test('current and retained editions get one mobile stylesheet and reader without
     export {withMobileSections,mobileSectionsAssets} from './lib/mobile-sections-document';
     export {renderEdition} from './lib/render-edition';
     export {editionAssets} from './lib/edition-assets';
-    export {default as worker} from './worker/production';`},outfile:out,bundle:true,platform:'node',format:'esm'});
+    export {default as worker} from './worker/production';`},outfile:out,bundle:true,platform:'node',format:'esm',plugins:[cloudflareNode]});
   const {withMobileSections,mobileSectionsAssets,renderEdition,editionAssets,worker}=await import(pathToFileURL(out));
   const version='e-'+'a'.repeat(24),edition=JSON.parse(fs.readFileSync('data/published-seed.json'));
   const current=renderEdition(edition,version),oldPaper='/reader-assets/paper-478d1c01f5113ae5.css';

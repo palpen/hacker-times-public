@@ -4,8 +4,9 @@ import {canReuseArchive} from './archived-copy';
 import {recoverFromFeed} from './publisher-feed';
 import type {Candidate} from '../contracts';
 import type {OfficialItem} from '../reporting';
-import {digest} from './storage';
-import {isProviderOverload,generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_EDITORIAL_ATTEMPTS,MAX_RESERVED_INPUT_TOKENS,EDITORIAL_REQUEST_POLICY} from './editorial-model';
+import {editorialRequestKey,unresolvedEditorialStatus} from './editorial-checkpoints';
+import {MAX_SNAPSHOT_AGE_MS} from './selection';
+import {isProviderOverload,generateEditorialCopy,reviewEditorialDraft,publisherFor,EditorialModelError,MAX_EDITORIAL_ATTEMPTS,MAX_RESERVED_INPUT_TOKENS} from './editorial-model';
 import {collectSnapshot,collectSource} from './collect';
 import {processImage,type ImagePlan} from './image-runner';
 import type {ProductionEnv,Root,Snapshot,Publication,Source} from './types';
@@ -56,11 +57,20 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
   const cost=Math.ceil(MAX_RESERVED_INPUT_TOKENS*inputPrice+maxOutputTokens*outputPrice);
   // Request-policy identity includes the corrected transport and copy-format policy.
   // Historical reservations remain counted and cannot be silently refunded.
-  const key=await digest({policy:EDITORIAL_REQUEST_POLICY,model,maxOutputTokens,id:selected.id,title:selected.title,url:selected.url,kind:source.kind,excerpt:source.excerpt,description:source.description});
-  let reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as {state:string;created?:boolean;retryAt?:number;attempt?:number;retryable?:boolean;draft?:unknown;result?:Awaited<ReturnType<typeof generateEditorialCopy>>};
+  const key=await editorialRequestKey(env,selected,source),identity={key,generatedAt:source.generatedAt,storyId:selected.id};
+  const reserve={...identity,cost,dailyLimit,monthlyLimit};
+  type CopyResult=Awaited<ReturnType<typeof generateEditorialCopy>>;
+  let reservation=await call(env,'model-reserve',reserve) as {state:string;created?:boolean;retryAt?:number;attempt?:number;retryable?:boolean;draft?:unknown;receipt?:unknown;result?:CopyResult};
+  if(reservation.state==='unknown_resolved'||(reservation.state==='reserved'&&'unknownResolvedAt' in reservation)){
+   return generateEditorialCopy({...source,kind:'unavailable',status:unresolvedEditorialStatus},selected,{apiKey:'',model,maxOutputTokens});
+  }
+  if(reservation.state==='reserved'&&reservation.receipt){
+   const saved=await call(env,'model-editorial-settle',identity) as {result:CopyResult};
+   reservation={state:'completed',result:saved.result};
+  }
   if(reservation.state==='reserved'&&!reservation.created){
    const recovery=await call(env,'model-rejected',{key,generatedAt:source.generatedAt,storyId:selected.id}) as {recovered:boolean;retryable:boolean};
-   if(recovery.recovered)reservation=await call(env,'model-reserve',{key,cost,dailyLimit,monthlyLimit}) as typeof reservation;
+   if(recovery.recovered)reservation=await call(env,'model-reserve',reserve) as typeof reservation;
   }
   if(reservation.state==='completed'&&reservation.result){
    // Reuse editorial copy, never old selection metadata. A history candidate
@@ -86,7 +96,12 @@ async function writeCopy(env:RunEnv,source:Source,selected:Candidate){
     }
     throw new RequestError(error instanceof EditorialModelError&&error.kind==='safety_stop'?'Editorial safety stop recorded; no retry or fallback':'Editorial generation failed; reservation retained for review',503);
    }
-   await call(env,'model-complete',{key,result,actualCost:Math.ceil(result.usage.inputTokens*inputPrice+result.usage.outputTokens*outputPrice)});
+   if(result.requested){
+    await call(env,'model-editorial-receipt',{...identity,result});
+    await call(env,'model-editorial-settle',identity);
+   }else{
+    await call(env,'model-complete',{key,result,actualCost:0});
+   }
   }
  }
  return result;
@@ -101,7 +116,7 @@ export async function summarize(env:RunEnv,args:Record<string,unknown>){
  // Only an explicit insufficient-evidence outcome reaches recovery. Provider,
  // safety, budget and transport failures retain their original workflow.
  if(result.story.summarySource==='unavailable'&&source.kind!=='hn_post'&&source.kind!=='publisher_feed'&&
-    !['unavailable_http_404','unavailable_http_410','fetch_url_rejected'].includes(source.status)){
+    !['unavailable_http_404','unavailable_http_410','fetch_url_rejected'].includes(source.status)&&result.story.articleStatus!==unresolvedEditorialStatus){
   const pin={generatedAt:source.generatedAt,id:source.id,sourceFingerprint:source.fingerprint};
   let recovered:Source|null=null;
   if(source.kind==='unavailable'&&canReuseArchive(selected))recovered=await call(env,'recover-archive',pin) as Source|null;
@@ -139,6 +154,7 @@ export async function runEdition(env:ProductionEnv,localRequest?:LocalRequest){
     throw error;
    }
   }
+  if(Date.now()-Date.parse(status.pending)>MAX_SNAPSHOT_AGE_MS)return {published:false,generatedAt:status.pending,checkpoint:'expired'};
   const snapshot=await call(scoped,'selection',{generatedAt:status.pending}) as Snapshot;
   const before=await call(scoped,'status',{generatedAt:snapshot.generatedAt}) as {missingIds:number[];cursor:number|null};
   const allIds=snapshot.selectedStories.map(x=>x.id),cursor=before.cursor===null?-1:allIds.indexOf(before.cursor);

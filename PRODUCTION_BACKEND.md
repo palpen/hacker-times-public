@@ -272,6 +272,43 @@ subrequest counts. This avoids the hosted self-call stall observed after the fir
 article checkpoint. The runtime model-backed alarm test and a namespace-denial
 regression cover this path.
 
+## Expired edition recovery
+
+For phone recovery, open **Recover expired edition** from the action-needed
+email or the repository’s Actions tab. Sign in to GitHub, choose `main`, and
+tap **Run workflow**. The workflow looks up the exact eligible batch and queues
+its replacement with the same checks as the manual operation below. A saved
+audit records which GitHub run queued it. The monitor sends confirmation once
+the homepage and freshness check agree that a fresh replacement is live.
+
+The workflow finds the eligible batch at the moment it runs. If it finds none,
+it reports that no recovery was needed. A safety hold stops the workflow and
+triggers a separate review email.
+
+### Detailed inspection
+
+From a checkout of main, run `node scripts/inspect-publisher.mjs --local-read`
+with the existing scoped Cloudflare deployment credential in your environment.
+The temporary preview returns pending age, progress, pinned base revision and
+reservation diagnostics to your terminal. GitHub Actions logs report only
+whether the operation succeeded.
+
+For a pending batch older than 48 hours, dispatch **Inspect Cloudflare publisher**
+from main with its exact timestamp, pinned base publication version and base
+revision. The production environment authorizes the temporary preview. The
+newsroom verifies the base, pending batch, lease and safety state in one
+transaction, records the GitHub run ID and attempt, and queues fresh collection.
+The saved edition stays current until its replacement passes ordinary publication
+checks.
+
+The recovery keeps the old batch, checkpoints and spending history. A validated
+provider receipt already saved by the runner can settle its reservation. If no
+verified receipt was saved, the charge remains fully reserved. If the same
+article and source evidence are selected again, the story can appear with its
+original HN title and Summary unavailable, without resending the model request.
+A safety hold blocks recovery and continues to block publication. Inspect again
+after a failure or timeout to see whether an audit was recorded.
+
 ## Output and publisher recovery
 
 HN can change the destination URL of an existing lead submission. Collection
@@ -279,9 +316,11 @@ uses the newly fetched official URL and authors its source again. The former
 URL is retired before lead selection; the submission ID remains active if it
 still wins, and is retired normally when replaced. A correction to an already
 retired URL remains ineligible. Historic editions retain their original links.
-Headline preservation applies only while the normalized source URL is unchanged.
-This prevents an upstream link edit from blocking every later collection or
-carrying old source copy onto a different destination.
+The production publisher reuses a lead headline only when the article identity,
+HN title, source text used for authorship and provenance still match. Engagement
+counts and fetch times do not affect that comparison. An edition saved before
+evidence identities were recorded uses the newly validated headline on the next
+publication.
 
 Current request identity is `editorial-v3-normalized-copy`. Single-line formatting
 is requested explicitly; validated copy normalizes whitespace without changing

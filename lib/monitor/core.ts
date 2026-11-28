@@ -1,6 +1,7 @@
+import type {PublisherMailState} from './publisher';
 export const INTERVAL_MS=300_000;
-export type Check={name:'availability'|'freshness';ok:boolean;detail:string};
-export type MonitorState={slot:number;failures:number;alerted:boolean;since?:string;checkedAt:string;checks:Check[];emailFailed?:boolean};
+export type Check={name:'availability'|'freshness';ok:boolean;detail:string;version?:string;generatedAt?:string};
+export type MonitorState={slot:number;failures:number;alerted:boolean;since?:string;checkedAt:string;checks:Check[];emailFailed?:boolean;publisherMail?:PublisherMailState;publisherRecoveryConnected?:boolean};
 export const initialState=():MonitorState=>({slot:-1,failures:0,alerted:false,checkedAt:'',checks:[]});
 
 export async function probe(fetcher:typeof fetch=fetch,now=Date.now()):Promise<Check[]>{
@@ -8,11 +9,11 @@ export async function probe(fetcher:typeof fetch=fetch,now=Date.now()):Promise<C
   try{
    const response=await fetcher('https://hackertimes.ca'+(name==='freshness'?'/readyz':'/'),{method:name==='freshness'?'GET':'HEAD',redirect:'manual',headers:{'Cache-Control':'no-cache'},signal:AbortSignal.timeout(10_000)});
    if(response.status!==200){await response.body?.cancel();return {name,ok:false,detail:'HTTP '+response.status};}
-   if(name==='availability')return {name,ok:true,detail:'HTTP 200'};
+   if(name==='availability')return {name,ok:true,detail:'HTTP 200',version:response.headers.get('X-Edition-Version')??undefined};
    const data=await response.json() as {status?:string;generatedAt?:string;publicationVersion?:string};
    const age=now-Date.parse(data.generatedAt??'');
    const ok=data.status==='ready'&&/^e-[a-f0-9]{24}$/.test(data.publicationVersion??'')&&Number.isFinite(age)&&age>=-60_000&&age<=2_700_000;
-   return {name,ok,detail:ok?'Fresh edition':'Invalid or stale readiness response'};
+   return {name,ok,detail:ok?'Fresh edition':'Invalid or stale readiness response',...(ok?{version:data.publicationVersion,generatedAt:data.generatedAt}:{})};
   }catch{return {name,ok:false,detail:'Request failed, timed out, or returned invalid JSON'};}
  }));
 }
@@ -35,6 +36,7 @@ export function alertMessage(kind:'failure'|'recovery',state:MonitorState){
  return {
   subject:kind==='failure'?'[Hacker Times] Website or refresh failure':'[Hacker Times] Recovered',
   text:[kind==='failure'?'Hacker Times failed two consecutive five-minute checks.':'Hacker Times is healthy again.',
+   ...(kind==='failure'&&state.checks.find(check=>check.name==='availability')?.ok?['The website is up. If the publisher needs you to recover an expired edition, you’ll get a separate email with a recovery link.']:[]),
    'Checked: '+state.checkedAt,'First failure: '+(state.since??'unknown'),
    ...state.checks.map(check=>check.name+': '+(check.ok?'OK':'FAILED')+' — '+check.detail),
    'Website: https://hackertimes.ca/','Freshness: https://hackertimes.ca/readyz',

@@ -1,7 +1,8 @@
 # Cloudflare monitoring Worker
 
 `hacker-times-monitor` is separate from the production reader/publisher. It has
-no public route, publishing credentials, or binding to the production Newsroom.
+no public route or publishing credentials. A named service binding reads a narrow
+publisher recovery signal. The monitor has no direct access to the Newsroom store.
 Its cron (`2-57/5 * * * *`) checks the public homepage and `/readyz` every five
 minutes. A separate SQLite-backed Durable Object serializes checks and stores
 one bounded state record.
@@ -19,6 +20,25 @@ the provider accepts mail but before its acknowledgement is stored can produce
 a duplicate email; exactly-once mail delivery is not claimed. No reminder emails
 are sent for a continuing incident. Delivery failures appear in Worker logs.
 A Cloudflare-wide failure can affect both the site and monitor.
+
+## Publisher recovery emails
+
+When publishing is enabled and an unfinished batch becomes eligible for recovery,
+the monitor sends one action-needed email for that batch. Its **Recover expired
+edition** link opens a manual GitHub workflow on `main` with no inputs. The
+workflow uses the current candidate and checks the pending batch, publication
+base, lease and safety state again before queuing fresh collection. An active
+safety hold sends its own review email.
+
+Queueing recovery is separate from publishing. After the newsroom records the
+first successful replacement, the monitor checks that the homepage and `/readyz`
+serve the same fresh version before emailing that a new edition is live. It can
+confirm a later fresh edition if the monitor missed the first replacement.
+
+After review, deploy production first so the named observer exists, then deploy
+the monitor with its existing verified recipient and a credential authorized for
+that separate Worker. The monitor deployment verification checks the private
+read alongside the independent public probes.
 
 ## Free-plan setup
 

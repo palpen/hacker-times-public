@@ -3,6 +3,11 @@ name: Pause automatic publishing
 # Production releases are manual and run only from the authoritative main branch.
 on:
   workflow_dispatch:
+    inputs:
+      repair_version:
+        description: 'Optional active Worker version UUID for schedule-only repair'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -108,10 +113,11 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
 
       # This is the only step that receives the scoped deployment credential.
-      # All six live switches are explicitly OFF; only the cron is removed.
+      # All seven live switches are explicitly OFF; only the cron is removed.
       # Existing remote Worker secrets are preserved; none are supplied here.
       - name: Pause publishing on the live production Worker
         env:
+          PUBLISHING_REPAIR_VERSION: ${{ inputs.repair_version }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
         run: |
