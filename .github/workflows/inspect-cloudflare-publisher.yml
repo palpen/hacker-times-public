@@ -1,8 +1,21 @@
 name: Inspect Cloudflare publisher
 on:
   workflow_dispatch:
+    inputs:
+      expired_pending:
+        description: 'Optional exact pending timestamp for expired-batch recovery'
+        type: string
+      base_publication_version:
+        description: 'Pinned base publication version from inspection'
+        type: string
+      base_revision:
+        description: 'Pinned base revision from inspection'
+        type: string
 permissions:
   contents: read
+concurrency:
+  group: hacker-times-production
+  cancel-in-progress: false
 jobs:
   inspect:
     if: >-
@@ -31,8 +44,11 @@ jobs:
           node --test tests/production-diagnostic.test.mjs
           node node_modules/eslint/bin/eslint.js scripts/inspect-publisher.mjs scripts/publisher-diagnostic-worker.mjs tests/production-diagnostic.test.mjs
           git diff --exit-code
-      - name: Read private publication status through an authenticated temporary preview
+      - name: Inspect or recover the publisher through an authenticated temporary preview
         env:
+          RECOVERY_GENERATED_AT: ${{ inputs.expired_pending }}
+          RECOVERY_BASE_VERSION: ${{ inputs.base_publication_version }}
+          RECOVERY_BASE_REVISION: ${{ inputs.base_revision }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: dc81a3cb74492ea63c9f3e14f13711a2
         run: node scripts/inspect-publisher.mjs

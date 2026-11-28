@@ -173,7 +173,8 @@ async function monthlyCandidates(incumbentId?:number,leadSelector?:LeadSelector,
  const gamesOnlyIds=new Set(history.gamesOnlyIds??[]);
  const rankedStories:Candidate[]=eligible.map(s=>{
   const url=publicUrl(s.url)?s.url:'https://news.ycombinator.com/item?id='+s.id,title=decode(s.title),position=positions.get(s.id);
-  return withGamesTopic({id:s.id,title,url,score:s.score,comments:s.descendants,time:s.time,...position,category:classifyTopicV4(title,url),topics:topicTags(title,url),discoverySource:position?'current':'history',editorialScore:0,...(gamesOnlyIds.has(s.id)&&!position?{gamesOnly:true as const}:{})},{text:s.text});
+  const sourceKind=!s.url?'hn_post':publicUrl(s.url)?'article':'rejected_external';
+  return withGamesTopic({id:s.id,title,url,score:s.score,comments:s.descendants,time:s.time,...(currentSource==='official-api'?{sourceKind}:{}),...position,category:classifyTopicV4(title,url),topics:topicTags(title,url),discoverySource:position?'current':'history',editorialScore:0,...(gamesOnlyIds.has(s.id)&&!position?{gamesOnly:true as const}:{})},{text:s.text});
  });
  const selectedStories=selectUnifiedMonthlyStories(rankedStories,sourcePages[0].ids,incumbentId,at,leadSelector?await leadSelector(rankedStories,sourcePages[0].ids,at):undefined,sourcePages.flatMap(p=>p.ids));
  const byId=new Map(eligible.map(s=>[s.id,s]));

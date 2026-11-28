@@ -12,7 +12,12 @@ export async function collectSnapshot(root:Root,hydrate?:OfficialItemHydrator):P
 export async function collectSource(s:Snapshot,id:number):Promise<Source>{
  const selected=s.selectedStories.find(x=>x.id===id);if(!selected)throw new RequestError('Article not selected');
  const url=new URL(selected.url);let source:Omit<Source,'fingerprint'>;
- if(url.origin==='https://news.ycombinator.com'&&url.pathname==='/item'&&url.searchParams.get('id')===String(id)){
+ const discussionLink=url.origin==='https://news.ycombinator.com'&&url.pathname==='/item'&&url.searchParams.get('id')===String(id);
+ if(selected.sourceKind==='rejected_external'){
+  if(!discussionLink)throw new RequestError('Invalid safe fallback link',409);
+  source={id,generatedAt:s.generatedAt,kind:'unavailable',excerpt:'',description:'',url:selected.url,fetchedAt:new Date().toISOString(),status:'fetch_url_rejected'};
+ }else if(selected.sourceKind==='hn_post'||(!selected.sourceKind&&discussionLink)){
+  if(!discussionLink)throw new RequestError('Invalid HN discussion link',409);
   const response=await fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json',{redirect:'manual',signal:AbortSignal.timeout(12_000)});
   if(!response.ok)throw new RequestError('HN source temporarily unavailable',502);
   const item=JSON.parse(await boundedBody(response,200_000));

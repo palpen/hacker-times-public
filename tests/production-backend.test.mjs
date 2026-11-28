@@ -20,8 +20,8 @@ class MemoryStorage {
  async transaction(fn){const run=this.tail.then(async()=>{const tx=new MemoryStorage();tx.data=structuredClone(this.data);tx.alarm=this.alarm;const result=await fn(tx);this.data=tx.data;this.alarm=tx.alarm;return result;});this.tail=run.catch(()=>{});return run;}
 }
 function imageFixture(marker=0){const b=new Uint8Array(45),d=new DataView(b.buffer);b.set([137,80,78,71,13,10,26,10]);d.setUint32(8,13);d.setUint32(12,0x49484452);d.setUint32(16,640);d.setUint32(20,360);b[32]=marker;d.setUint32(37,0x49454e44);return b;}
-async function setup(env){
- const storage=new MemoryStorage();let ready;const state={storage,blockConcurrencyWhile:fn=>ready=fn()};const newsroom=new api.Newsroom(state,env);await ready;
+async function setup(env,storage=new MemoryStorage()){
+ let ready;const state={storage,blockConcurrencyWhile:fn=>ready=fn()};const newsroom=new api.Newsroom(state,env);await ready;
  const request=(op,args={})=>newsroom.fetch(new Request('https://internal/'+op,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)}));
  const call=async(op,args={})=>{const r=await request(op,args),body=await r.json();if(!r.ok)throw Object.assign(Error(body.error),{status:r.status});return body;};
  return {storage,request,call,newsroom};
@@ -244,7 +244,10 @@ test('real local workerd SQLite commits, restarts and restores an isolated cold 
   const recoveredNs=await mf.getDurableObjectNamespace('NEWSROOM'),recovered=recoveredNs.get(recoveredNs.idFromName('production-v1'));
   const restoredCall=async(op,args={})=>{const r=await recovered.fetch('https://internal/'+op,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});return {status:r.status,body:await r.json()};};
   assert.deepEqual((await restoredCall('root')).body,authority);
-  assert.deepEqual((await restoredCall('status',{generatedAt:pending.generatedAt})).body,checkpoint);
+  const {ageMs,...restoredCheckpoint}=(await restoredCall('status',{generatedAt:pending.generatedAt})).body;
+  const {ageMs:originalAge,...savedCheckpoint}=checkpoint;
+  assert.ok(ageMs>=originalAge);
+  assert.deepEqual(restoredCheckpoint,savedCheckpoint);
   assert.equal((await restoredCall('status')).body.modelBudget.dailyReservedMicroUsd,100);
   assert.equal((await restoredCall('model-reserve',{key:unknownKey,cost:100,dailyLimit:200,monthlyLimit:400})).status,409);
   assert.equal((await restoredCall('publish',{generatedAt:pending.generatedAt})).status,409);
@@ -935,4 +938,192 @@ test('runner recovers stored HTTP503 overload once without refund and rejects a 
    assert.equal(calls,1);
   }finally{globalThis.fetch=old;}
  }
+});
+
+test('lead corrections update both headline and deck for the same link and for a repost while prior editions stay pinned',async()=>{
+ const s=await setup(),at=Date.now()-240_000,items=pool(at),firstTime=at-24*3600_000;
+ for(const item of items)item.time-=24*3600;
+ async function publish(time,rows,headline,evidence){
+  const fixture=snapshot(await s.call('root'),time,rows);
+  await s.call('snapshot',{snapshot:fixture});
+  for(const row of fixture.selectedStories){
+   const lead=row.placement==='lead';
+   await s.call('stage',await author(s,fixture,row,lead?{headline,summary:evidence,shortSummary:evidence}:{},lead?{excerpt:evidence}:{}));
+  }
+  await s.call('validate',{generatedAt:fixture.generatedAt});
+  const {version}=await s.call('publish',{generatedAt:fixture.generatedAt});
+  return s.call('edition',{version});
+ }
+ const first=await publish(firstTime,items,'Fictional archive chooses blue','The fictional archive chooses blue.');
+ const corrected=await publish(at+1000,items,'Fictional archive chooses red','The fictional archive chooses red.');
+ const aliasItems=[{...items[0],id:999},...items.slice(1)];
+ const alias=await publish(at+2000,aliasItems,'Fictional archive chooses gold','The fictional archive chooses gold.');
+ const votes=await publish(at+3000,[{...aliasItems[0],score:1000,comments:100},...aliasItems.slice(1)],'An equivalent new headline','The fictional archive chooses gold.');
+ for(const [publication,id,headline,deck] of [
+  [corrected,items[0].id,'Fictional archive chooses red','The fictional archive chooses red.'],
+  [alias,999,'Fictional archive chooses gold','The fictional archive chooses gold.'],
+  [votes,999,'Fictional archive chooses gold','The fictional archive chooses gold.'],
+ ]){
+  const lead=publication.edition.stories[0];
+  assert.equal(lead.id,id);
+  assert.equal(lead.headline,headline);
+  assert.equal(lead.shortSummary,deck);
+ }
+ assert.equal(votes.edition.stories[0].score,1000);
+ assert.equal(votes.leadEvidence,alias.leadEvidence);
+ const archived=await s.call('edition',{date:first.edition.editionDate});
+ assert.deepEqual(archived,first);
+ assert.match(archived.html,/Fictional archive chooses blue/);
+
+ const {leadEvidence:_,...legacy}=votes;
+ assert.ok(_);
+ await api.writeBlob(s.storage,'version/'+legacy.version,legacy);
+ const next=await publish(at+4000,aliasItems,'New copy after a legacy edition','The fictional archive chooses gold.');
+ assert.equal(next.edition.stories[0].headline,'New copy after a legacy edition');
+});
+
+const recoveryTestEnv=()=>({
+ AUTO_EDITORIAL_ENABLED:'true',SCHEDULE_ENABLED:'true',MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',
+ MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',
+ MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000',
+});
+const sortingProse='The fictional Finch Archive introduced a sorting system that groups its paper collection by color, reducing the work required to organize each box.';
+function copyResponse(provenance){
+ const draft={headline:'Fictional archive sorts paper by color',summary:sortingProse,shortSummary:sortingProse,summarySource:provenance};
+ return Response.json({status:'completed',usage:{input_tokens:50,output_tokens:30,total_tokens:80},
+  output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify(draft)}]}]});
+}
+function fictionalNews(ids,items){
+ return input=>{
+  const url=String(input);
+  if(url.endsWith('/topstories.json'))return Response.json(ids);
+  if(url.startsWith('https://hn.algolia.com/'))return Response.json({hits:[],hitsPerPage:100,nbHits:0,nbPages:0,page:0});
+  const match=/^https:\/\/hacker-news\.firebaseio\.com\/v0\/item\/(\d+)\.json$/.exec(url);
+  if(!match)return null;
+  const id=Number(match[1]);
+  return Response.json(items.get(id)??{id,type:'story',deleted:true});
+ };
+}
+
+for(const scenario of ['lost-response','saved-receipt','safety-hold']){
+ test('expired publisher recovery after '+scenario,async()=>{
+  const originalFetch=globalThis.fetch,originalNow=Date.now,env=recoveryTestEnv();
+  let system=await setup(env),clock=originalNow(),interruptSettlement=scenario==='saved-receipt',sends=0;
+  Date.now=()=>clock;
+  env.NEWSROOM={idFromName:()=>0,get:()=>({fetch:async request=>{
+   const op=new URL(request.url).pathname.slice(1),args=await request.json();
+   if(op==='model-editorial-settle'&&interruptSettlement)return Response.json({error:'fictional interrupted settlement'},{status:503});
+   return system.request(op,args);
+  }})};
+  const ids=Array.from({length:90},(_,index)=>7000+index);
+  const leadUrl='https://fictional.example/sorting';
+  const items=new Map(ids.slice(0,4).map((id,index)=>[id,{id,type:'story',title:'Fictional report '+id,url:index===0?leadUrl:'https://fictional.example/'+id,score:300-index*10,descendants:0,time:Math.floor(clock/1000)-3600}]));
+  const hn=fictionalNews(ids,items);
+  globalThis.fetch=async input=>{
+   if(input==='https://api.openai.com/v1/responses'){
+    sends++;
+    if(scenario!=='saved-receipt')throw new TypeError('fictional provider accepted the request and lost the response');
+    return copyResponse('article');
+   }
+   if(input===leadUrl)return new Response('<html><article><p>'+sortingProse+'</p></article></html>',{headers:{'Content-Type':'text/html'}});
+   return hn(input)??new Response(null,{status:404});
+  };
+  try{
+   const collected=await api.runEdition(env),at=collected.generatedAt;
+   assert.equal(collected.checkpoint,'collected');
+   const pinned=await system.call('selection',{generatedAt:at});
+   const ownerArgs={generatedAt:at,basePublicationVersion:pinned.basePublicationVersion,baseRevision:pinned.baseRevision,githubRun:'12345/1'};
+   assert.equal(pinned.selectedStories[0].id,ids[0]);
+   await api.runEdition(env);
+   assert.equal(sends,1);
+   system=await setup(env,system.storage);
+   for(let i=0;i<3;i++)await api.runEdition(env);
+   const pending=await system.call('status',{generatedAt:at}),model=await system.call('model-review',{generatedAt:at,storyId:ids[0]});
+   assert.deepEqual(pending.missingIds,[ids[0]],'independent articles finish after restart');
+   assert.ok(pending.lastProgressAt);
+   assert.equal(model.reason,scenario==='saved-receipt'?'receipt_pending':'model_outcome_uncertain');
+   const reservationKey='model/'+model.reservationKey;
+   const reservation=await system.storage.get(reservationKey);
+   assert.equal(sends,1);
+   await assert.rejects(system.call('recover-expired-batch',ownerArgs),/older than 48 hours/);
+   const old=await system.call('run-claim');
+   clock+=49*3600_000;
+   if(scenario==='safety-hold'){
+    await system.call('failure',{generatedAt:at,kind:'safety_stop'});
+    await assert.rejects(system.call('recover-expired-batch',ownerArgs),/safety stop/);
+    await assert.rejects(api.runEdition(env),/safety stop/);
+    assert.equal((await system.call('status')).pending,at);
+    assert.equal((await system.call('root')).version,'empty');
+    assert.equal((await system.call('status')).lastRecovery,null);
+    return;
+   }
+   assert.equal((await api.runEdition(env)).checkpoint,'expired');
+   await assert.rejects(system.call('recover-expired-batch',{...ownerArgs,baseRevision:1}),/base changed/);
+   const freshLease=await system.call('run-claim');
+   await assert.rejects(system.call('recover-expired-batch',ownerArgs),/lease is active/);
+   await system.call('run-release',{_runToken:freshLease.token});
+   const recovered=await system.call('recover-expired-batch',ownerArgs);
+   const outcome=scenario==='saved-receipt'?'receipt_settled':'charge_retained';
+   assert.deepEqual(recovered.resolutions,[{storyId:ids[0],reservationKey:model.reservationKey,outcome}]);
+   assert.deepEqual((await system.call('status')).lastRecovery,recovered);
+   assert.equal((await system.call('recover-expired-batch',ownerArgs)).unchanged,true);
+   assert.equal(system.storage.alarm,clock+1000);
+   assert.deepEqual((await system.call('status',{generatedAt:at})).missingIds,[ids[0]]);
+   await assert.rejects(system.call('publish',{generatedAt:at,_runToken:old.token}),/lease expired or superseded/);
+   const retained=await system.storage.get(reservationKey);
+   assert.equal(retained.state,scenario==='saved-receipt'?'completed':'reserved');
+   const expectedCost=scenario==='saved-receipt'?22:reservation.cost;
+   assert.equal(await system.storage.get('budget/day/'+reservation.day),expectedCost);
+   assert.equal(await system.storage.get('budget/month/'+reservation.month),expectedCost);
+   interruptSettlement=false;
+   const replacement=await api.runEdition(env);
+   assert.equal(replacement.checkpoint,'collected');
+   assert.notEqual(replacement.generatedAt,at);
+   for(let i=0;i<14&&(await system.call('status')).pending;i++)await api.runEdition(env);
+   const current=await system.call('edition');
+   assert.equal(current.edition.generatedAt,replacement.generatedAt);
+   assert.equal(current.edition.stories.length,pinned.selectedStories.length);
+   assert.equal(sends,1);
+   const lead=current.edition.stories[0];
+   assert.equal(lead.id,ids[0]);
+   assert.equal(lead.summarySource,scenario==='saved-receipt'?'article':'unavailable');
+   if(scenario==='lost-response'){
+    assert.equal(lead.headline,items.get(ids[0]).title);
+    assert.equal(lead.articleStatus,'editorial_outcome_unknown');
+   }
+  }finally{globalThis.fetch=originalFetch;Date.now=originalNow;}
+ });
+}
+
+test('official discovery distinguishes a self-post from a rejected external link through publication',async()=>{
+ const env=recoveryTestEnv(),s=await setup(env),originalFetch=globalThis.fetch;
+ env.NEWSROOM={idFromName:()=>0,get:()=>({fetch:async request=>s.request(new URL(request.url).pathname.slice(1),await request.json())})};
+ const ids=Array.from({length:90},(_,index)=>8000+index);
+ const item=(id,title)=>({id,type:'story',title,score:300,descendants:0,time:Math.floor(Date.now()/1000)-3600});
+ const items=new Map([[ids[0],{...item(ids[0],'A fictional self-post'),text:sortingProse}],[ids[1],{...item(ids[1],'A fictional link'),url:'http://127.0.0.1/fake'}]]);
+ const hn=fictionalNews(ids,items),modelInputs=[];
+ globalThis.fetch=async(input,options)=>{
+  if(input==='https://api.openai.com/v1/responses'){
+   modelInputs.push(JSON.parse(JSON.parse(options.body).input[0].content[0].text));
+   return copyResponse('hn_post');
+  }
+  return hn(input)??assert.fail('Unexpected publisher fetch: '+input);
+ };
+ try{
+  const {generatedAt}=await api.runEdition(env);
+  const selection=await s.call('selection',{generatedAt});
+  assert.equal(selection.selectedStories.find(row=>row.id===ids[0]).sourceKind,'hn_post');
+  assert.equal(selection.selectedStories.find(row=>row.id===ids[1]).sourceKind,'rejected_external');
+  items.set(ids[0],{...items.get(ids[0]),url:'https://example.com/replaced'});
+  await assert.rejects(api.summarize(env,{generatedAt,id:ids[0]}),/identity changed/);
+  delete items.get(ids[0]).url;
+  for(let i=0;i<10&&(await s.call('status')).pending;i++)await api.runEdition(env);
+  const publication=await s.call('edition');
+  const self=publication.edition.stories.find(row=>row.id===ids[0]),rejected=publication.edition.stories.find(row=>row.id===ids[1]);
+  assert.equal(self.summarySource,'hn_post');
+  assert.equal(rejected.summarySource,'unavailable');
+  assert.equal(rejected.articleStatus,'fetch_url_rejected');
+  assert.equal(rejected.url,'https://news.ycombinator.com/item?id='+ids[1]);
+  assert.deepEqual(modelInputs.map(input=>input.evidenceKind),['hn_post']);
+ }finally{globalThis.fetch=originalFetch;}
 });
