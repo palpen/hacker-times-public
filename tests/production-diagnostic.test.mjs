@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import yaml from 'js-yaml';
 import worker from '../scripts/publisher-diagnostic-worker.mjs';
 test('temporary publisher inspection permits only fixed read operations and bounds model reviews',async()=>{
  const paths=[];
@@ -38,4 +40,42 @@ test('temporary recovery preview forwards only the exact dispatch configured by 
  assert.deepEqual(calls,[]);
  assert.equal((await worker.fetch(new Request(url,{method:'POST'}),env)).status,200);
  assert.deepEqual(calls,[['/recover-expired-batch',args]]);
+});
+
+test('phone recovery discovers the current candidate and submits its exact identity without user input',async()=>{
+ const generatedAt='2026-11-14T03:00:00.000Z',basePublicationVersion='e-'+'a'.repeat(24),baseRevision=9;
+ const candidate={generatedAt,basePublicationVersion,baseRevision,ignored:'never forward unrelated fields'};
+ const calls=[];
+ let status={candidate:null,safetyHoldAt:null},recoverStatus=200;
+ const env={CURRENT_BATCH_RECOVERY:'349/1',NEWSROOM:{idFromName:x=>x,get:()=>({fetch:async request=>{
+  const path=new URL(request.url).pathname;
+  calls.push([path,await request.json()]);
+  return path==='/publisher-recovery-status'?Response.json(status):Response.json({private:'not exposed'},{status:recoverStatus});
+ }})}};
+ const url='https://private.example/recover-expired';
+ const recover=()=>worker.fetch(new Request(url,{method:'POST'}),env);
+ assert.equal((await worker.fetch(new Request(url,{method:'POST',body:'{"baseRevision":5}'}),env)).status,404);
+ assert.deepEqual(await (await recover()).json(),{outcome:'no_candidate'});
+ assert.deepEqual(calls,[['/publisher-recovery-status',{}]]);
+ status={candidate,safetyHoldAt:generatedAt};
+ assert.equal((await recover()).status,409);
+ assert.equal(calls.length,2,'no mutation during a safety hold');
+ status={candidate,safetyHoldAt:null};recoverStatus=409;
+ const blocked=await recover();
+ assert.equal(blocked.status,409);assert.deepEqual(await blocked.json(),{outcome:'blocked'});
+ recoverStatus=200;
+ assert.deepEqual(await (await recover()).json(),{outcome:'queued'});
+ assert.deepEqual(calls.at(-1),['/recover-expired-batch',{generatedAt,basePublicationVersion,baseRevision,githubRun:'349/1'}]);
+});
+
+test('phone workflow has no inputs and is manual, main-only and production-gated',()=>{
+ const workflow=yaml.load(readFileSync('.github/workflows/recover-expired-edition.yml','utf8'));
+ assert.deepEqual(workflow.on,{workflow_dispatch:null});
+ assert.deepEqual(workflow.permissions,{contents:'read'});
+ assert.deepEqual(workflow.concurrency,{group:'hacker-times-production','cancel-in-progress':false});
+ const job=workflow.jobs.recover;
+ assert.equal(job.environment,'production');
+ assert.equal(job.if,"github.event_name == 'workflow_dispatch' && github.repository == 'palpen/hacker-times-public' && github.ref == 'refs/heads/main'");
+ assert.equal(job.steps.at(-1).run,'node scripts/inspect-publisher.mjs --recover-current');
+ assert.equal(job.steps.filter(step=>step.env?.CLOUDFLARE_API_TOKEN).length,1);
 });

@@ -5,13 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {build} from 'esbuild';
+import {cloudflareNode} from './fixtures/cloudflare-node.mjs';
 
 test('saved editions get clickable section titles immediately without republishing',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-section-links-'));
  try{
   const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
   fs.writeFileSync(entry,`export {withSectionHeadingLinks} from '${process.cwd()}/lib/section-heading-document';export {renderEdition} from '${process.cwd()}/lib/render-edition';export {default as worker} from '${process.cwd()}/worker/production';export {categories} from '${process.cwd()}/lib/contracts';export {editionAssets} from '${process.cwd()}/lib/edition-assets';`);
-  await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm'});
+  await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',plugins:[cloudflareNode]});
   const {withSectionHeadingLinks,renderEdition,worker,categories,editionAssets}=await import(pathToFileURL(out));
   const edition=JSON.parse(fs.readFileSync('data/published-seed.json'));
   const version='e-'+ 'a'.repeat(24),current=renderEdition(edition,version);

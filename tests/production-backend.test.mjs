@@ -1,11 +1,12 @@
 import test from 'node:test';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import assert from 'node:assert/strict';
+import {cloudflareNode} from './fixtures/cloudflare-node.mjs';
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';import {build} from 'esbuild';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ht-production-'));
 const entry=path.join(dir,'entry.ts'),out=path.join(dir,'entry.mjs');
 fs.writeFileSync(entry,`export {processImage} from '${process.cwd()}/lib/production/image-runner';export {imageReviewKey,imageUrl,hashImage,encodeImage,IMAGE_POLICY} from '${process.cwd()}/lib/production/images';export {importArchive} from '${process.cwd()}/lib/production/archive-import';export {readBlob,writeBlob} from '${process.cwd()}/lib/production/storage';export {CollectionError} from '${process.cwd()}/lib/collection-error';export {observeRun,runLogEvent} from '${process.cwd()}/lib/production/run-log';export {Newsroom} from '${process.cwd()}/lib/production/newsroom';export {pinSnapshot,chooseLead} from '${process.cwd()}/lib/production/selection';export {digest} from '${process.cwd()}/lib/production/storage';export {selectUnifiedMonthlyStories,unifiedSectionPolicyVersion,unifiedSectionPolicyConfig} from '${process.cwd()}/lib/policy';export {default as worker} from '${process.cwd()}/worker/production';export {collectSource} from '${process.cwd()}/lib/production/collect';export {EDITORIAL_REQUEST_POLICY} from '${process.cwd()}/lib/production/editorial-model';export {summarize,runEdition,collect as collectMetadata} from '${process.cwd()}/lib/production/runner';`);
-const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true});
+const built=await build({entryPoints:[entry],outfile:out,bundle:true,platform:'node',format:'esm',metafile:true,plugins:[cloudflareNode]});
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>x.endsWith('lib/production/auth.ts')),'removed auth module must not enter production bundle');
 assert.ok(!Object.keys(built.metafile.inputs).some(x=>/data\/|lib\/(publication|editor|editorial-staging|lead-state)\.ts/.test(x)),'independent backend must not bundle old data/managed writer');
 const api=await import(pathToFileURL(out));
@@ -221,7 +222,7 @@ test('source failure alone is not staged; validation is invalidated by intention
 
 test('real local workerd SQLite commits, restarts and restores an isolated cold backup',async()=>{
  const workerPath=path.join(dir,'runtime-worker.mjs');
- await build({entryPoints:['worker/production.ts'],outfile:workerPath,bundle:true,format:'esm',platform:'browser'});
+ await build({entryPoints:['worker/production.ts'],outfile:workerPath,bundle:true,format:'esm',platform:'browser',external:['cloudflare:workers']});
  const persist=path.join(dir,'persist');
  const options={rootPath:dir,modules:true,scriptPath:workerPath,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},resourcePersistencePath:persist,bindings:{MUTATIONS_ENABLED:'false',LIVE_FETCH_ENABLED:'false',PUBLICATION_ENABLED:'false',SCHEDULE_ENABLED:'false'}};
  let mf=new Miniflare(convertV4MiniflareOptions(options));
@@ -251,6 +252,21 @@ test('real local workerd SQLite commits, restarts and restores an isolated cold 
   assert.equal((await restoredCall('status')).body.modelBudget.dailyReservedMicroUsd,100);
   assert.equal((await restoredCall('model-reserve',{key:unknownKey,cost:100,dailyLimit:200,monthlyLimit:400})).status,409);
   assert.equal((await restoredCall('publish',{generatedAt:pending.generatedAt})).status,409);
+ }finally{await mf.dispose();}
+});
+
+test('the real named Worker binding exposes publisher recovery status without a public endpoint or mutation',async()=>{
+ const workerPath=path.join(dir,'observer-worker.mjs');
+ await build({entryPoints:['worker/production.ts'],outfile:workerPath,bundle:true,format:'esm',platform:'browser',external:['cloudflare:workers']});
+ const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[
+  {name:'monitor',modules:true,compatibilityDate:'2026-05-15',serviceBindings:{PUBLISHER_RECOVERY:{name:'editorial',entrypoint:'PublisherRecoveryObserver'},READER:'editorial'},script:
+   'export default {async fetch(_,env){const status=await env.PUBLISHER_RECOVERY.read(); const publicStatus=(await env.READER.fetch("https://reader.example/publisher-recovery-status")).status; let canRecover=false;try{await env.PUBLISHER_RECOVERY.recover();canRecover=true;}catch{}return Response.json({status,publicStatus,canRecover});}};'},
+  {name:'editorial',modules:true,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],scriptPath:workerPath,durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}}},
+ ]}));
+ try{
+  const response=await mf.dispatchFetch('https://fixture.example/');
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{status:{candidate:null,safetyHoldAt:null,recovery:null},publicStatus:404,canRecover:false});
  }finally{await mf.dispose();}
 });
 test('durable conservative model reservations cap spending and never replay uncertain calls',async()=>{
@@ -422,7 +438,7 @@ test('private metadata failure diagnostics strip arbitrary fields and cannot byp
  assert.deepEqual((await s.call('status')).runner.collectionFailure,status.runner.collectionFailure,'release without a lease cannot invent retries');
 });
 test('real workerd alarms finish bounded chunks through the private namespace',async()=>{
- const file=path.join(dir,'alarm-worker.mjs');await build({entryPoints:['worker/production.ts'],outfile:file,bundle:true,format:'esm',platform:'browser'});
+ const file=path.join(dir,'alarm-worker.mjs');await build({entryPoints:['worker/production.ts'],outfile:file,bundle:true,format:'esm',platform:'browser',external:['cloudflare:workers']});
  const mf=new Miniflare(convertV4MiniflareOptions({rootPath:dir,workers:[{name:'editorial',outboundService:'provider',modules:true,scriptPath:file,compatibilityDate:'2026-05-15',compatibilityFlags:['nodejs_compat'],durableObjects:{NEWSROOM:{className:'Newsroom',useSQLite:true}},bindings:{MUTATIONS_ENABLED:'true',LIVE_FETCH_ENABLED:'true',PUBLICATION_ENABLED:'true',SCHEDULE_ENABLED:'true',AUTO_EDITORIAL_ENABLED:'true',MODEL_API_ENABLED:'true',OPENAI_API_KEY:'fictional',EDITORIAL_MODEL:'gpt-6-luna',MODEL_MAX_OUTPUT_TOKENS:'1024',MODEL_INPUT_USD_PER_MILLION:'0.125',MODEL_OUTPUT_USD_PER_MILLION:'0.50',MODEL_DAILY_LIMIT_MICRO_USD:'1000000',MODEL_MONTHLY_LIMIT_MICRO_USD:'5000000'}},{name:'provider',modules:true,compatibilityDate:'2026-05-15',script:`const attempts=new Map();export default {async fetch(request){
  if(request.method==='GET')return Response.json(null);
  const input=await request.json();const data=JSON.parse(input.input[0].content[0].text);const attempt=attempts.get(data.originalTitle)||0;attempts.set(data.originalTitle,attempt+1);
@@ -1040,6 +1056,7 @@ for(const scenario of ['lost-response','saved-receipt','safety-hold']){
    for(let i=0;i<3;i++)await api.runEdition(env);
    const pending=await system.call('status',{generatedAt:at}),model=await system.call('model-review',{generatedAt:at,storyId:ids[0]});
    assert.deepEqual(pending.missingIds,[ids[0]],'independent articles finish after restart');
+   assert.equal((await system.call('publisher-recovery-status')).candidate,null);
    assert.ok(pending.lastProgressAt);
    assert.equal(model.reason,scenario==='saved-receipt'?'receipt_pending':'model_outcome_uncertain');
    const reservationKey='model/'+model.reservationKey;
@@ -1050,6 +1067,9 @@ for(const scenario of ['lost-response','saved-receipt','safety-hold']){
    clock+=49*3600_000;
    if(scenario==='safety-hold'){
     await system.call('failure',{generatedAt:at,kind:'safety_stop'});
+    const signal=await system.call('publisher-recovery-status');
+    assert.equal(signal.candidate,null);
+    assert.ok(signal.safetyHoldAt);
     await assert.rejects(system.call('recover-expired-batch',ownerArgs),/safety stop/);
     await assert.rejects(api.runEdition(env),/safety stop/);
     assert.equal((await system.call('status')).pending,at);
@@ -1060,9 +1080,14 @@ for(const scenario of ['lost-response','saved-receipt','safety-hold']){
    assert.equal((await api.runEdition(env)).checkpoint,'expired');
    await assert.rejects(system.call('recover-expired-batch',{...ownerArgs,baseRevision:1}),/base changed/);
    const freshLease=await system.call('run-claim');
+   assert.equal((await system.call('publisher-recovery-status')).candidate,null);
    await assert.rejects(system.call('recover-expired-batch',ownerArgs),/lease is active/);
    await system.call('run-release',{_runToken:freshLease.token});
+   const signal=await system.call('publisher-recovery-status');
+   const {githubRun:run,...expectedCandidate}=ownerArgs;assert.ok(run);
+   assert.deepEqual(signal.candidate,expectedCandidate);
    const recovered=await system.call('recover-expired-batch',ownerArgs);
+   assert.deepEqual(await system.call('publisher-recovery-status'),{candidate:null,safetyHoldAt:null,recovery:{id:at,replacement:null}});
    const outcome=scenario==='saved-receipt'?'receipt_settled':'charge_retained';
    assert.deepEqual(recovered.resolutions,[{storyId:ids[0],reservationKey:model.reservationKey,outcome}]);
    assert.deepEqual((await system.call('status')).lastRecovery,recovered);
@@ -1082,6 +1107,7 @@ for(const scenario of ['lost-response','saved-receipt','safety-hold']){
    for(let i=0;i<14&&(await system.call('status')).pending;i++)await api.runEdition(env);
    const current=await system.call('edition');
    assert.equal(current.edition.generatedAt,replacement.generatedAt);
+   assert.deepEqual((await system.call('publisher-recovery-status')).recovery,{id:at,replacement:{version:current.version,generatedAt:replacement.generatedAt}});
    assert.equal(current.edition.stories.length,pinned.selectedStories.length);
    assert.equal(sends,1);
    const lead=current.edition.stories[0];

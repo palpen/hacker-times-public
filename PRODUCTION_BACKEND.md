@@ -274,6 +274,19 @@ regression cover this path.
 
 ## Expired edition recovery
 
+For phone recovery, open **Recover expired edition** from the action-needed
+email or the repository’s Actions tab. Sign in to GitHub, choose `main`, and
+tap **Run workflow**. The workflow looks up the exact eligible batch and queues
+its replacement with the same checks as the manual operation below. A saved
+audit records which GitHub run queued it. The monitor sends confirmation once
+the homepage and freshness check agree that a fresh replacement is live.
+
+The workflow finds the eligible batch at the moment it runs. If it finds none,
+it reports that no recovery was needed. A safety hold stops the workflow and
+triggers a separate review email.
+
+### Detailed inspection
+
 From a checkout of main, run `node scripts/inspect-publisher.mjs --local-read`
 with the existing scoped Cloudflare deployment credential in your environment.
 The temporary preview returns pending age, progress, pinned base revision and
@@ -284,8 +297,9 @@ For a pending batch older than 48 hours, dispatch **Inspect Cloudflare publisher
 from main with its exact timestamp, pinned base publication version and base
 revision. The production environment authorizes the temporary preview. The
 newsroom verifies the base, pending batch, lease and safety state in one
-transaction, records the GitHub run ID and attempt, and queues fresh collection. The saved edition stays current until its replacement
-passes ordinary publication checks.
+transaction, records the GitHub run ID and attempt, and queues fresh collection.
+The saved edition stays current until its replacement passes ordinary publication
+checks.
 
 The recovery keeps the old batch, checkpoints and spending history. A validated
 provider receipt already saved by the runner can settle its reservation. If no

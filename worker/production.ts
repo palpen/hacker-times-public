@@ -1,3 +1,4 @@
+import {WorkerEntrypoint} from 'cloudflare:workers';
 import {developingRoute,developingList,developingRequest} from '../lib/developing-news/routes';
 import {withDevelopingNews} from '../lib/developing-news/render';
 export {DevelopingNews} from '../lib/developing-news/tracker';
@@ -13,7 +14,15 @@ import {observeRun} from '../lib/production/run-log';
 import {readinessResponse} from '../lib/production/readiness';
 import {call,enabled,collect,runEdition} from '../lib/production/runner';
 import type {ImageAsset} from '../lib/production/images';
+import type {PublisherRecoveryStatus} from '../lib/publisher-recovery';
 export {Newsroom} from '../lib/production/newsroom';
+
+// Only the monitor's named service binding reaches this read-only entrypoint.
+export class PublisherRecoveryObserver extends WorkerEntrypoint<ProductionEnv> {
+ async read():Promise<PublisherRecoveryStatus>{
+  return await call(this.env,'publisher-recovery-status') as PublisherRecoveryStatus;
+ }
+}
 const comments=createCommentsService({readDevelopingStory:async(request,bindings,threadId)=>{
  try{const query=new URLSearchParams({threadId,storyId:new URL(request.url).searchParams.get('storyId')!});const response=await developingRequest(bindings as unknown as ProductionEnv,'/comments-context?'+query);return response.ok?await response.json() as {stories:{id:number}[]}:null;}catch{return null;}
 },readEdition:async(_req,bindings,date,version)=>{

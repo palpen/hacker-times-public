@@ -8,6 +8,7 @@
   "preview_urls": false,
   "observability": {"enabled": true, "head_sampling_rate": 1},
   "durable_objects": {"bindings": [{"name": "MONITOR", "class_name": "SiteMonitor"}]},
+  "services": [{"binding":"PUBLISHER_RECOVERY","service":"hacker-times-production","entrypoint":"PublisherRecoveryObserver"}],
   "migrations": [{"tag": "monitor-v1", "new_sqlite_classes": ["SiteMonitor"]}],
   "send_email": [{"name": "EMAIL"}],
   "vars": {"ALERT_FROM": "alerts@hackertimes.ca"},

@@ -56,11 +56,77 @@ test('persisted monitor retries failed emails, deduplicates ticks, and survives 
   assert.equal(worker.fetch(new Request('https://public/tick')).status,404);
  }finally{globalThis.fetch=originalFetch;Date.now=originalNow;}
 });
-test('monitor has isolated SQLite state, no public route, no publisher binding, and five-minute cron',()=>{
+test('monitor has isolated SQLite state, no public route, a read-only observer and five-minute cron',()=>{
  const config=JSON.parse(fs.readFileSync('wrangler.monitor.jsonc','utf8'));
  assert.equal(config.name,'hacker-times-monitor');assert.equal(config.workers_dev,false);assert.equal(config.preview_urls,false);
  assert.deepEqual(config.triggers.crons,['2-57/5 * * * *']);assert.equal(config.routes,undefined);
  assert.deepEqual(config.durable_objects.bindings,[{name:'MONITOR',class_name:'SiteMonitor'}]);
+ assert.deepEqual(config.services,[{binding:'PUBLISHER_RECOVERY',service:'hacker-times-production',entrypoint:'PublisherRecoveryObserver'}]);
  assert.deepEqual(config.migrations,[{tag:'monitor-v1',new_sqlite_classes:['SiteMonitor']}]);
  assert.equal(config.vars.ALERT_TO,undefined,'recipient must not be in public source');
+});
+
+test('publisher recovery emails retry on delivery errors and confirm only a fresh replacement visible on the homepage',async()=>{
+ const data=new Map(),emails=[],storage={get:async key=>structuredClone(data.get(key)),put:async(key,value)=>data.set(key,structuredClone(value))};
+ const originalFetch=globalThis.fetch,originalNow=Date.now;
+ let now=Math.floor(Date.now()/300000)*300000,mailFails=false,ready=false;
+ const at=new Date(now-49*3600_000).toISOString(),base='e-'+'a'.repeat(24),replacement='e-'+'b'.repeat(24);
+ let homepage=base,readinessVersion=base,generatedAt=new Date(now-49*3600_000).toISOString();
+ let status={candidate:null,safetyHoldAt:null,recovery:null};
+ const env={ALERT_TO:'ops@example.com',ALERT_FROM:'alerts@example.com',PUBLISHER_RECOVERY:{read:async()=>status},EMAIL:{send:async message=>{
+  if(mailFails)throw Error('fictional temporary delivery failure');
+  emails.push(message);
+ }}};
+ let monitor=new SiteMonitor({storage},env);
+ const tick=()=>monitor.fetch(new Request('https://internal/tick',{method:'POST',body:JSON.stringify({scheduledTime:now})}));
+ const advance=()=>{now+=300_000;return tick();};
+ Date.now=()=>now;
+ globalThis.fetch=async url=>url.endsWith('/readyz')?(ready?Response.json({status:'ready',generatedAt,publicationVersion:readinessVersion}):new Response(null,{status:503})):
+  new Response(null,{status:200,headers:{'X-Edition-Version':homepage}});
+ try{
+  await tick();assert.equal(emails.length,0);
+  status={...status,candidate:{generatedAt:at,basePublicationVersion:base,baseRevision:8}};
+  mailFails=true;await assert.rejects(advance,/Monitor email failed/);
+  assert.equal(data.get('state').publisherMail,undefined);
+  mailFails=false;monitor=new SiteMonitor({storage},env);await advance();await advance();
+  assert.equal(emails.length,1);
+  assert.match(emails[0].subject,/Action needed: recover/);
+  assert.match(emails[0].html,/href="https:\/\/github\.com\/palpen\/hacker-times-public\/actions\/workflows\/recover-expired-edition\.yml"/);
+  assert.match(emails[0].text,/Run workflow/);
+  assert.ok(!emails[0].text.includes(at));assert.ok(!emails[0].html.includes(base));
+  status={...status,candidate:null,recovery:{id:at,replacement:null}};
+  await advance();assert.equal(emails.length,1,'queueing recovery does not confirm publication');
+  generatedAt=new Date(now).toISOString();
+  status={...status,recovery:{id:at,replacement:{version:replacement,generatedAt}}};
+  ready=true;readinessVersion=replacement;
+  await advance();assert.equal(emails.length,1,'a fresh readiness response alone does not prove the homepage serves the replacement');
+  homepage=replacement;mailFails=true;
+  await assert.rejects(advance,/Monitor email failed/);
+  mailFails=false;monitor=new SiteMonitor({storage},env);await advance();await advance();
+  assert.equal(emails.length,2);
+  assert.match(emails[1].subject,/a fresh edition is live/);
+  assert.match(emails[1].text,/https:\/\/hackertimes\.ca\//);
+  assert.equal(data.get('state').publisherMail.replacement,at);
+  assert.equal(data.get('state').publisherRecoveryConnected,true);
+ }finally{globalThis.fetch=originalFetch;Date.now=originalNow;}
+});
+
+test('publisher safety hold sends one review email and withholds the recovery link',async()=>{
+ const data=new Map(),emails=[],storage={get:async key=>structuredClone(data.get(key)),put:async(key,value)=>data.set(key,structuredClone(value))};
+ const originalFetch=globalThis.fetch,originalNow=Date.now;
+ let now=Math.floor(Date.now()/300000)*300000;
+ const hold=new Date(now).toISOString(),version='e-'+'b'.repeat(24);
+ const env={ALERT_TO:'ops@example.com',ALERT_FROM:'alerts@example.com',PUBLISHER_RECOVERY:{read:async()=>({candidate:null,safetyHoldAt:hold,recovery:null})},EMAIL:{send:async message=>emails.push(message)}};
+ const monitor=new SiteMonitor({storage},env);
+ Date.now=()=>now;
+ globalThis.fetch=async url=>url.endsWith('/readyz')?Response.json({status:'ready',generatedAt:new Date(now).toISOString(),publicationVersion:version}):new Response(null,{status:200});
+ try{
+  for(let i=0;i<3;i++){
+   await monitor.fetch(new Request('https://internal/tick',{method:'POST',body:JSON.stringify({scheduledTime:now})}));
+   now+=300_000;
+  }
+  assert.equal(emails.length,1);
+  assert.match(emails[0].subject,/Action needed: publisher safety hold/);
+  assert.ok(!emails[0].text.includes('recover-expired-edition.yml'));
+ }finally{globalThis.fetch=originalFetch;Date.now=originalNow;}
 });

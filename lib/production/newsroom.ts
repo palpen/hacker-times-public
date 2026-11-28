@@ -22,6 +22,7 @@ import type {Edition} from '../contracts';
 import type {ProductionEnv,Root,Snapshot,Staged,Source,Publication} from './types';
 import {publicFetchUrl} from '../reporting';
 import {imageHash,imageUrl,imageReviewKey,validImageAsset,cleanImageAlt,IMAGE_POLICY,type ImageAsset,type ImageResult} from './images';
+import type {PublisherRecoveryStatus,RecoveryCandidate,RecoveryReplacement} from '../publisher-recovery';
 const empty=():Root=>({schema:1,revision:0,version:'empty',archives:{},ledger:{retiredIds:[],retiredKeys:[],observations:[]}});
 type CollectionFailure={scheduleSlot:string|null;attempts:number;failedAt:string;httpStatus:number;details:CollectionDetails|null;retryAt:string|null;recoveredAt:string|null};
 const collectionFailureKey='run/collection-failure';
@@ -36,10 +37,23 @@ function expired(at:string){return Date.now()-Date.parse(at)>MAX_SNAPSHOT_AGE_MS
 function progressKey(at:string){return 'run/last-progress/'+at;}
 function recordProgress(store:Store,at:string){return store.put(progressKey(at),new Date(Date.now()).toISOString());}
 function reservationCheckpoint(at:string,id:number){return 'run/editorial/'+at+'/'+id;}
-type RecoveryAudit={
- generatedAt:string;basePublicationVersion:string;baseRevision:number;githubRun:string;recordedAt:string;
+type RecoveryAudit=RecoveryCandidate&{
+ githubRun:string;recordedAt:string;replacement?:RecoveryReplacement;
  resolutions:{storyId:number;reservationKey:string;outcome:'receipt_settled'|'charge_retained'}[];
 };
+async function lastRecovery(store:Store){
+ const at=await store.get<string>('run/last-recovery');
+ return at?await store.get<RecoveryAudit>('recovery/'+at)??null:null;
+}
+async function recoveryCandidate(store:Store,root:Root):Promise<RecoveryCandidate|null>{
+ const generatedAt=await store.get<string>('pending');
+ if(!generatedAt||!expired(generatedAt)||root.safetyStop)return null;
+ const lease=await store.get<{expiresAt:number}>('run/lease');
+ if(lease&&lease.expiresAt>Date.now())return null;
+ const snapshot=await readBlob<Snapshot>(store,snapshotKey(generatedAt));
+ if(!snapshot||snapshot.basePublicationVersion!==root.version||snapshot.baseRevision!==root.revision)return null;
+ return {generatedAt,basePublicationVersion:root.version,baseRevision:root.revision};
+}
 async function pinnedEditorial(store:Store,s:Snapshot,id:unknown,env?:ProductionEnv){
  const selected=s.selectedStories.find(x=>x.id===id);
  const source=selected?await store.get<Source>(sourceKey(s.generatedAt,selected.id)):null;
@@ -187,6 +201,14 @@ export class Newsroom {
      if(!/^[a-f0-9]{64}$/.test(hash)||!await tx.get('published-image/'+hash))throw new RequestError('Image not found',404);
      const asset=await readBlob<ImageAsset>(tx,'image-asset/'+hash);if(!asset)throw new RequestError('Image missing',503);return asset;
     }
+    if(path==='/publisher-recovery-status'){
+     const audit=await lastRecovery(tx);
+     return {
+      candidate:this.automatic()&&this.env?.PUBLICATION_ENABLED==='true'?await recoveryCandidate(tx,root):null,
+      safetyHoldAt:root.safetyStop?.recordedAt??null,
+      recovery:audit?{id:audit.generatedAt,replacement:audit.replacement??null}:null,
+     } satisfies PublisherRecoveryStatus;
+    }
     if(path==='/recover-expired-batch'){
      hold(root);
      if(this.env?.MUTATIONS_ENABLED!=='true')throw new RequestError('Publisher recovery is disabled',503);
@@ -329,8 +351,7 @@ export class Newsroom {
      await tx.put('pending',s.generatedAt);return {generatedAt:s.generatedAt,selected:s.selectedStories.length,baseVersion:root.version,published:false};
     }
     if(path==='/status'&&!args.generatedAt){
-     const lastRecovery=await tx.get<string>('run/last-recovery');
-     return {lastRecovery:lastRecovery?await tx.get('recovery/'+lastRecovery)??null:null,runner:{leaseExpiresAt:(await tx.get<{expiresAt:number}>('run/lease'))?.expiresAt??null,scheduleSlot:await tx.get('schedule/slot')??null,collectionFailure:await tx.get<CollectionFailure>(collectionFailureKey)??null},publicationVersion:root.version,publicationRevision:root.revision,generatedAt:root.generatedAt??null,safetyStop:root.safetyStop??null,pending:await tx.get('pending')??null,modelBudget:{dailyReservedMicroUsd:await tx.get('budget/day/'+new Date().toISOString().slice(0,10))??0,monthlyReservedMicroUsd:await tx.get('budget/month/'+new Date().toISOString().slice(0,7))??0}};
+     return {lastRecovery:await lastRecovery(tx),runner:{leaseExpiresAt:(await tx.get<{expiresAt:number}>('run/lease'))?.expiresAt??null,scheduleSlot:await tx.get('schedule/slot')??null,collectionFailure:await tx.get<CollectionFailure>(collectionFailureKey)??null},publicationVersion:root.version,publicationRevision:root.revision,generatedAt:root.generatedAt??null,safetyStop:root.safetyStop??null,pending:await tx.get('pending')??null,modelBudget:{dailyReservedMicroUsd:await tx.get('budget/day/'+new Date().toISOString().slice(0,10))??0,monthlyReservedMicroUsd:await tx.get('budget/month/'+new Date().toISOString().slice(0,7))??0}};
     }
     const at=stamp(args.generatedAt),s=await readBlob<Snapshot>(tx,snapshotKey(at));if(!s)throw new RequestError('Saved selection not found',404);
     if(path==='/status'){
@@ -475,6 +496,10 @@ export class Newsroom {
      for(const story of edition.stories)if(story.image)await tx.put('published-image/'+imageHash(story.image),true);
      const archives=Object.fromEntries(Object.entries({...root.archives,[edition.editionDate!]:version}).sort(([a],[b])=>b.localeCompare(a)).slice(0,31));
      const next:Root={...root,revision:root.revision+1,version,generatedAt:at,previous:root.version==='empty'?undefined:root.version,archives,ledger:s.nextLedger};
+     const audit=await lastRecovery(tx);
+     if(audit&&!audit.replacement&&audit.basePublicationVersion===root.version&&at>=audit.recordedAt){
+      await tx.put('recovery/'+audit.generatedAt,{...audit,replacement:{version,generatedAt:at}});
+     }
      await writeBlob(tx,'root',next);await tx.delete('pending');await tx.deleteAlarm();
      return {published:true,version,generatedAt:at,stories:edition.stories.length,leadId:edition.stories[0].id};
     }
